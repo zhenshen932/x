@@ -319,9 +319,6 @@ class AppRouterManager(private val context: Context) {
         return fallbackMime ?: "*/*"
     }
 
-    /**
-     * Pure memory lookup when includeAllApps is true (ZERO Binder IPC calls on UI thread!).
-     */
     fun getAvailableAppsFast(
         fileName: String,
         mimeType: String,

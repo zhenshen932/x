@@ -1,6 +1,8 @@
 package com.omnimedia.hub
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -73,6 +75,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
@@ -80,7 +83,6 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -88,21 +90,22 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-// Refined Linear / Apple Pro Dark Monochrome & Titanium Palette (Zero tacky blue/green!)
-private val BgCarbon = Color(0xFF0A0A0C)
-private val SurfaceGraphite = Color(0xFF121216)
-private val CardCharcoal = Color(0xFF18181E)
-private val CardElevated = Color(0xFF22222A)
-private val BorderHairline = Color(0xFF272730)
-private val AccentTitanium = Color(0xFFE4E4E7)
-private val AccentDarkInk = Color(0xFF09090B)
-private val AccentSoftIndigo = Color(0xFFA5B4FC)
-private val TextPrimary = Color(0xFFF4F4F6)
-private val TextSecondary = Color(0xFF8E8E99)
+// Deep Carbon Dark with Refined Indigo-Periwinkle & Jewel-Tone Accents (Eliminating ugly flat grey blocks!)
+private val BgCarbon = Color(0xFF0B0C10)
+private val SurfaceGraphite = Color(0xFF13151C)
+private val CardCharcoal = Color(0xFF191C26)
+private val CardElevated = Color(0xFF232736)
+private val BorderHairline = Color(0xFF2A2F40)
+private val AccentIndigo = Color(0xFF6366F1)
+private val AccentPeriwinkle = Color(0xFF818CF8)
+private val AccentContainerIndigo = Color(0xFF232645)
+private val TextPrimary = Color(0xFFF4F5F8)
+private val TextSecondary = Color(0xFF9499AD)
 
 sealed class ActivePage {
     object Home : ActivePage()
-    data class MediaPlayer(val file: RecentFileEntry) : ActivePage()
+    data class VideoPlayer(val file: RecentFileEntry) : ActivePage()
+    data class AudioPlayer(val file: RecentFileEntry) : ActivePage()
     data class ImageViewer(val file: RecentFileEntry) : ActivePage()
     data class UnsupportedFileView(val file: RecentFileEntry) : ActivePage()
 }
@@ -122,8 +125,8 @@ class MainActivity : ComponentActivity() {
                 background = BgCarbon,
                 surface = SurfaceGraphite,
                 surfaceVariant = CardCharcoal,
-                primary = AccentTitanium,
-                secondaryContainer = CardElevated,
+                primary = AccentIndigo,
+                secondaryContainer = AccentContainerIndigo,
                 onBackground = TextPrimary,
                 onSurface = TextPrimary
             )
@@ -177,6 +180,18 @@ fun OmniMediaAppContent(
     val routerManager = remember { AppRouterManager(context) }
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 
+    // Request notification permission on Android 13+ so background audio notification always appears
+    val notifPermLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) {}
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+    }
+
     var lang by remember { mutableStateOf(routerManager.getLanguage()) }
     val isZh = lang == "zh"
 
@@ -196,7 +211,11 @@ fun OmniMediaAppContent(
     fun navigateToFilePage(entry: RecentFileEntry) {
         routerSheetTargetFile = null
         activePage = when {
-            entry.isMedia -> ActivePage.MediaPlayer(entry)
+            entry.isAudio -> {
+                AudioPlayerController.playFile(context, entry)
+                ActivePage.AudioPlayer(entry)
+            }
+            entry.isVideo -> ActivePage.VideoPlayer(entry)
             entry.isImage -> ActivePage.ImageViewer(entry)
             else -> ActivePage.UnsupportedFileView(entry)
         }
@@ -311,13 +330,13 @@ fun OmniMediaAppContent(
                         Box(
                             modifier = Modifier
                                 .size(40.dp)
-                                .background(AccentTitanium, RoundedCornerShape(12.dp)),
+                                .background(AccentIndigo, RoundedCornerShape(12.dp)),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 Icons.Default.PlayArrow,
                                 contentDescription = null,
-                                tint = AccentDarkInk,
+                                tint = Color.White,
                                 modifier = Modifier.size(24.dp)
                             )
                         }
@@ -358,10 +377,10 @@ fun OmniMediaAppContent(
                                 scope.launch { drawerState.close() }
                             },
                             colors = NavigationDrawerItemDefaults.colors(
-                                selectedContainerColor = CardElevated,
-                                selectedTextColor = TextPrimary,
-                                selectedIconColor = AccentTitanium,
-                                unselectedTextColor = TextSecondary,
+                                selectedContainerColor = AccentContainerIndigo,
+                                selectedTextColor = AccentPeriwinkle,
+                                selectedIconColor = AccentPeriwinkle,
+                                unselectedTextColor = TextPrimary,
                                 unselectedIconColor = TextSecondary
                             ),
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 3.dp)
@@ -405,7 +424,7 @@ fun OmniMediaAppContent(
                         ) {
                             Text(
                                 text = if (isZh) "清空记录" else "Clear",
-                                color = TextSecondary,
+                                color = Color(0xFFF87171),
                                 fontSize = 13.sp,
                                 maxLines = 1
                             )
@@ -420,8 +439,8 @@ fun OmniMediaAppContent(
                     FloatingActionButton(
                         onClick = { documentPickerLauncher.launch(arrayOf("*/*")) },
                         shape = RoundedCornerShape(18.dp),
-                        containerColor = AccentTitanium,
-                        contentColor = AccentDarkInk,
+                        containerColor = AccentIndigo,
+                        contentColor = Color.White,
                         modifier = Modifier.size(58.dp)
                     ) {
                         Icon(Icons.Default.Add, contentDescription = "Open File", modifier = Modifier.size(26.dp))
@@ -481,7 +500,7 @@ fun OmniMediaAppContent(
                                         fontSize = 15.sp,
                                         fontFamily = FontFamily.Default
                                     ),
-                                    cursorBrush = SolidColor(AccentTitanium),
+                                    cursorBrush = SolidColor(AccentPeriwinkle),
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             }
@@ -511,7 +530,7 @@ fun OmniMediaAppContent(
                                 Icon(
                                     Icons.Default.FolderOpen,
                                     contentDescription = "Open File",
-                                    tint = TextPrimary,
+                                    tint = AccentPeriwinkle,
                                     modifier = Modifier.size(18.dp)
                                 )
                             }
@@ -531,13 +550,13 @@ fun OmniMediaAppContent(
                             Icon(
                                 Icons.Default.Tune,
                                 contentDescription = "Settings",
-                                tint = TextPrimary,
+                                tint = AccentPeriwinkle,
                                 modifier = Modifier.size(18.dp)
                             )
                         }
                     }
 
-                    // 2. SECONDARY BAR: Sort Selector + Persisted Smooth List/Grid Toggle
+                    // 2. SECONDARY BAR
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -590,7 +609,7 @@ fun OmniMediaAppContent(
                                 Icon(
                                     Icons.Default.ArrowDownward,
                                     contentDescription = "Sort Order",
-                                    tint = TextPrimary,
+                                    tint = AccentPeriwinkle,
                                     modifier = Modifier
                                         .size(15.dp)
                                         .graphicsLayer { rotationZ = arrowRotation }
@@ -598,14 +617,13 @@ fun OmniMediaAppContent(
                             }
                         }
 
-                        // Monochrome Titanium Segmented View Toggle
                         val listBg by animateColorAsState(
-                            targetValue = if (!isGridView) AccentTitanium else Color.Transparent,
+                            targetValue = if (!isGridView) AccentIndigo else Color.Transparent,
                             animationSpec = tween(160),
                             label = "ListBg"
                         )
                         val gridBg by animateColorAsState(
-                            targetValue = if (isGridView) AccentTitanium else Color.Transparent,
+                            targetValue = if (isGridView) AccentIndigo else Color.Transparent,
                             animationSpec = tween(160),
                             label = "GridBg"
                         )
@@ -631,7 +649,7 @@ fun OmniMediaAppContent(
                                 Icon(
                                     Icons.Default.FormatListBulleted,
                                     contentDescription = "List View",
-                                    tint = if (!isGridView) AccentDarkInk else TextSecondary,
+                                    tint = if (!isGridView) Color.White else TextSecondary,
                                     modifier = Modifier.size(18.dp)
                                 )
                             }
@@ -651,7 +669,7 @@ fun OmniMediaAppContent(
                                 Icon(
                                     Icons.Default.GridView,
                                     contentDescription = "Grid View",
-                                    tint = if (isGridView) AccentDarkInk else TextSecondary,
+                                    tint = if (isGridView) Color.White else TextSecondary,
                                     modifier = Modifier.size(18.dp)
                                 )
                             }
@@ -660,7 +678,70 @@ fun OmniMediaAppContent(
 
                     HorizontalDivider(color = BorderHairline, thickness = 1.dp)
 
-                    // 3. RECENT FILES CONTENT (With smooth transitions for both Category Filter AND Grid/List switching!)
+                    // Background Audio Mini-Player Bar (when audio is playing in background on Home screen)
+                    val bgAudioFile = AudioPlayerController.currentFile
+                    AnimatedVisibility(visible = bgAudioFile != null) {
+                        if (bgAudioFile != null) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 8.dp)
+                                    .background(AccentContainerIndigo, RoundedCornerShape(14.dp))
+                                    .border(1.dp, AccentIndigo.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
+                                    .clickable { activePage = ActivePage.AudioPlayer(bgAudioFile) }
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Default.GraphicEq,
+                                    contentDescription = null,
+                                    tint = AccentPeriwinkle,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = AudioPlayerController.trackTitle.ifBlank { bgAudioFile.name },
+                                        color = TextPrimary,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = AudioPlayerController.trackArtist.ifBlank { bgAudioFile.extension },
+                                        color = TextSecondary,
+                                        fontSize = 11.sp,
+                                        maxLines = 1
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { AudioPlayerController.skipPrev(context) },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(Icons.Default.SkipPrevious, contentDescription = "Prev", tint = TextPrimary)
+                                }
+                                IconButton(
+                                    onClick = { AudioPlayerController.togglePlayPause(context) },
+                                    modifier = Modifier.size(34.dp)
+                                ) {
+                                    Icon(
+                                        if (AudioPlayerController.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                        contentDescription = "Play/Pause",
+                                        tint = AccentPeriwinkle
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { AudioPlayerController.skipNext(context) },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(Icons.Default.SkipNext, contentDescription = "Next", tint = TextPrimary)
+                                }
+                            }
+                        }
+                    }
+
+                    // 3. RECENT FILES CONTENT
                     val filteredFiles = remember(recentFiles, searchQuery, categoryFilter, sortField, sortDescending) {
                         recentFiles
                             .filter { f ->
@@ -687,7 +768,6 @@ fun OmniMediaAppContent(
                             }
                     }
 
-                    // Combined state key so switching Drawer Category OR switching Grid/List has a smooth non-overlapping transition!
                     val contentStateKey = Triple(categoryFilter, isGridView, filteredFiles.isEmpty())
 
                     AnimatedContent(
@@ -724,7 +804,7 @@ fun OmniMediaAppContent(
                                         Icon(
                                             Icons.Default.FolderOpen,
                                             contentDescription = null,
-                                            tint = TextSecondary,
+                                            tint = AccentPeriwinkle,
                                             modifier = Modifier.size(30.dp)
                                         )
                                     }
@@ -813,14 +893,24 @@ fun OmniMediaAppContent(
                 slideOutVertically(targetOffsetY = { it / 16 }, animationSpec = tween(160))
         ) {
             when (val page = activePage) {
-                is ActivePage.MediaPlayer -> {
-                    BuiltInMediaPlayerScreen(
+                is ActivePage.VideoPlayer -> {
+                    BuiltInVideoPlayerScreen(
                         file = page.file,
                         isZh = isZh,
                         onBack = { activePage = ActivePage.Home },
                         onOpenRouterSheet = {
                             routerShareMode = false
                             routerSheetTargetFile = page.file
+                        }
+                    )
+                }
+                is ActivePage.AudioPlayer -> {
+                    BuiltInAudioPlayerScreen(
+                        file = AudioPlayerController.currentFile ?: page.file,
+                        onBack = { activePage = ActivePage.Home },
+                        onOpenRouterSheet = {
+                            routerShareMode = false
+                            routerSheetTargetFile = AudioPlayerController.currentFile ?: page.file
                         }
                     )
                 }
@@ -934,8 +1024,8 @@ fun OmniMediaAppContent(
                                 routerManager.setLanguage("zh")
                             },
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isZh) AccentTitanium else CardCharcoal,
-                                contentColor = if (isZh) AccentDarkInk else TextPrimary
+                                containerColor = if (isZh) AccentIndigo else CardCharcoal,
+                                contentColor = Color.White
                             )
                         ) {
                             Text("简体中文")
@@ -946,8 +1036,8 @@ fun OmniMediaAppContent(
                                 routerManager.setLanguage("en")
                             },
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (!isZh) AccentTitanium else CardCharcoal,
-                                contentColor = if (!isZh) AccentDarkInk else TextPrimary
+                                containerColor = if (!isZh) AccentIndigo else CardCharcoal,
+                                contentColor = Color.White
                             )
                         ) {
                             Text("English")
@@ -967,7 +1057,7 @@ fun OmniMediaAppContent(
                         },
                         colors = ButtonDefaults.filledTonalButtonColors(
                             containerColor = CardCharcoal,
-                            contentColor = TextPrimary
+                            contentColor = AccentPeriwinkle
                         ),
                         modifier = Modifier.fillMaxWidth()
                     ) {
@@ -979,7 +1069,7 @@ fun OmniMediaAppContent(
             },
             confirmButton = {
                 TextButton(onClick = { showSettingsDialog = false }) {
-                    Text(if (isZh) "关闭" else "Close", color = TextPrimary)
+                    Text(if (isZh) "关闭" else "Close", color = AccentPeriwinkle)
                 }
             }
         )
@@ -987,7 +1077,7 @@ fun OmniMediaAppContent(
 }
 
 // =============================================================================
-// GRID CARD & LIST ROW (Zero offscreen .clip() layers for ultra-fast rendering!)
+// GRID CARD & LIST ROW (With tasteful Jewel-Tone Badges instead of ugly flat grey!)
 // =============================================================================
 @Composable
 fun RecentFileGridCard(
@@ -996,6 +1086,12 @@ fun RecentFileGridCard(
     onCardClick: () -> Unit,
     onMoreClick: () -> Unit
 ) {
+    val badgeColor = when {
+        file.isVideo -> Color(0xFFF43F5E)
+        file.isAudio -> Color(0xFF38BDF8)
+        file.isImage -> Color(0xFF10B981)
+        else -> Color(0xFF818CF8)
+    }
     val badgeIcon = when {
         file.isVideo -> Icons.Default.PlayArrow
         file.isAudio -> Icons.Default.GraphicEq
@@ -1015,13 +1111,13 @@ fun RecentFileGridCard(
             Box(
                 modifier = Modifier
                     .size(26.dp)
-                    .background(CardElevated, RoundedCornerShape(7.dp)),
+                    .background(badgeColor, RoundedCornerShape(7.dp)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = badgeIcon,
                     contentDescription = null,
-                    tint = AccentTitanium,
+                    tint = Color.White,
                     modifier = Modifier.size(16.dp)
                 )
             }
@@ -1064,12 +1160,12 @@ fun RecentFileGridCard(
             ) {
                 Box(
                     modifier = Modifier
-                        .background(CardElevated, RoundedCornerShape(4.dp))
+                        .background(badgeColor.copy(alpha = 0.2f), RoundedCornerShape(4.dp))
                         .padding(horizontal = 6.dp, vertical = 2.dp)
                 ) {
                     Text(
                         text = file.extension,
-                        color = AccentTitanium,
+                        color = badgeColor,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -1092,7 +1188,7 @@ fun RecentFileGridCard(
 
             Text(
                 text = formatTimestamp(file.openedTimestamp, isZh),
-                color = TextSecondary,
+                color = AccentPeriwinkle,
                 fontSize = 10.sp,
                 maxLines = 1
             )
@@ -1107,6 +1203,13 @@ fun RecentFileListRow(
     onRowClick: () -> Unit,
     onMoreClick: () -> Unit
 ) {
+    val badgeColor = when {
+        file.isVideo -> Color(0xFFF43F5E)
+        file.isAudio -> Color(0xFF38BDF8)
+        file.isImage -> Color(0xFF10B981)
+        else -> Color(0xFF818CF8)
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1119,12 +1222,12 @@ fun RecentFileListRow(
         Box(
             modifier = Modifier
                 .size(42.dp)
-                .background(CardElevated, RoundedCornerShape(10.dp)),
+                .background(badgeColor.copy(alpha = 0.2f), RoundedCornerShape(10.dp)),
             contentAlignment = Alignment.Center
         ) {
             Text(
                 text = file.extension,
-                color = AccentTitanium,
+                color = badgeColor,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold
             )
@@ -1154,13 +1257,10 @@ fun RecentFileListRow(
 }
 
 // =============================================================================
-// 1. BUILT-IN VIDEO & AUDIO PLAYER SCREEN
-// - Video Player: 3-dots button placed at Top-Right (matching 1000043487.jpg!)
-// - Audio Player: 3-dots button placed at the right side of the transport buttons row (matching 1000043485.jpg!)
-// - Bottom giant bar completely removed!
+// 1A. BUILT-IN VIDEO PLAYER SCREEN (Top-Right 3-dots button)
 // =============================================================================
 @Composable
-fun BuiltInMediaPlayerScreen(
+fun BuiltInVideoPlayerScreen(
     file: RecentFileEntry,
     isZh: Boolean,
     onBack: () -> Unit,
@@ -1169,9 +1269,6 @@ fun BuiltInMediaPlayerScreen(
     BackHandler(onBack = onBack)
     val context = LocalContext.current
     var playbackSpeed by remember { mutableFloatStateOf(1.0f) }
-    var isPlaying by remember { mutableStateOf(true) }
-    var currentPosMs by remember { mutableLongStateOf(0L) }
-    var durationMs by remember { mutableLongStateOf(0L) }
     var playerErrorMsg by remember { mutableStateOf<String?>(null) }
 
     val exoPlayer = remember(file.uriString) {
@@ -1185,31 +1282,10 @@ fun BuiltInMediaPlayerScreen(
                 playerErrorMsg = e.localizedMessage ?: "Playback error"
             }
             addListener(object : Player.Listener {
-                override fun onIsPlayingChanged(playing: Boolean) {
-                    isPlaying = playing
-                }
-
-                override fun onPlaybackStateChanged(playbackState: Int) {
-                    if (playbackState == Player.STATE_READY) {
-                        durationMs = duration.coerceAtLeast(0L)
-                    }
-                }
-
                 override fun onPlayerError(error: PlaybackException) {
                     playerErrorMsg = error.localizedMessage ?: "Playback error"
                 }
             })
-        }
-    }
-
-    LaunchedEffect(exoPlayer, file.isAudio) {
-        if (file.isAudio) {
-            while (true) {
-                currentPosMs = exoPlayer.currentPosition.coerceAtLeast(0L)
-                val dur = exoPlayer.duration
-                if (dur > 0) durationMs = dur
-                delay(200L)
-            }
         }
     }
 
@@ -1221,6 +1297,143 @@ fun BuiltInMediaPlayerScreen(
             }
         }
     }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(BgCarbon)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(SurfaceGraphite)
+                .padding(horizontal = 10.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = TextPrimary)
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = file.name,
+                    color = TextPrimary,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "${file.extension} • ${file.sizeLabel} • ${file.mimeType}",
+                    color = AccentPeriwinkle,
+                    fontSize = 11.sp,
+                    maxLines = 1
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .background(CardCharcoal, RoundedCornerShape(10.dp))
+                    .border(1.dp, BorderHairline, RoundedCornerShape(10.dp))
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable {
+                        val speeds = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f, 3.0f)
+                        val nextIdx = (speeds.indexOf(playbackSpeed) + 1) % speeds.size
+                        playbackSpeed = speeds[nextIdx]
+                        exoPlayer.playbackParameters = PlaybackParameters(playbackSpeed)
+                    }
+                    .padding(horizontal = 11.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    text = "${playbackSpeed}x",
+                    color = AccentPeriwinkle,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 13.sp
+                )
+            }
+
+            Spacer(modifier = Modifier.width(4.dp))
+            IconButton(onClick = onOpenRouterSheet) {
+                Icon(
+                    Icons.Default.MoreVert,
+                    contentDescription = "Open With or Share",
+                    tint = TextPrimary
+                )
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            contentAlignment = Alignment.Center
+        ) {
+            AndroidView(
+                factory = { ctx ->
+                    PlayerView(ctx).apply {
+                        player = exoPlayer
+                        useController = true
+                    }
+                },
+                update = { view ->
+                    if (view.player != exoPlayer) {
+                        view.player = exoPlayer
+                    }
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+
+            if (playerErrorMsg != null) {
+                Column(
+                    modifier = Modifier
+                        .padding(24.dp)
+                        .fillMaxWidth()
+                        .background(SurfaceGraphite, RoundedCornerShape(16.dp))
+                        .border(1.dp, BorderHairline, RoundedCornerShape(16.dp))
+                        .padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(
+                        Icons.Default.ErrorOutline,
+                        contentDescription = null,
+                        tint = Color(0xFFF87171),
+                        modifier = Modifier.size(34.dp)
+                    )
+                    Text(
+                        text = if (isZh) "当前编码流需外部解码器播放" else "Stream requires external decoder",
+                        color = TextPrimary,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = playerErrorMsg ?: "",
+                        color = TextSecondary,
+                        fontSize = 12.sp
+                    )
+                }
+            }
+        }
+    }
+}
+
+// =============================================================================
+// 1B. BUILT-IN BACKGROUND-ENABLED AUDIO PLAYER SCREEN
+// - Bound to AudioPlaybackService & AudioPlayerController so audio NEVER stops when exiting!
+// - Refined Indigo-Periwinkle waveform centerpiece & Play/Pause button (no ugly flat grey!)
+// - 3-dots button placed on the right end of the bottom transport row (matching 1000043485.jpg!)
+// =============================================================================
+@Composable
+fun BuiltInAudioPlayerScreen(
+    file: RecentFileEntry,
+    onBack: () -> Unit,
+    onOpenRouterSheet: () -> Unit
+) {
+    BackHandler(onBack = onBack)
+    val context = LocalContext.current
+
+    val isPlaying = AudioPlayerController.isPlaying
+    val currentPosMs = AudioPlayerController.currentPositionMs
+    val durationMs = AudioPlayerController.durationMs
+    val playbackSpeed = AudioPlayerController.playbackSpeed
 
     Column(
         modifier = Modifier
@@ -1249,7 +1462,7 @@ fun BuiltInMediaPlayerScreen(
                 )
                 Text(
                     text = "${file.extension} • ${file.sizeLabel} • ${file.mimeType}",
-                    color = TextSecondary,
+                    color = AccentPeriwinkle,
                     fontSize = 11.sp,
                     maxLines = 1
                 )
@@ -1260,305 +1473,213 @@ fun BuiltInMediaPlayerScreen(
                     .background(CardCharcoal, RoundedCornerShape(10.dp))
                     .border(1.dp, BorderHairline, RoundedCornerShape(10.dp))
                     .clip(RoundedCornerShape(10.dp))
-                    .clickable {
-                        val speeds = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f, 3.0f)
-                        val nextIdx = (speeds.indexOf(playbackSpeed) + 1) % speeds.size
-                        playbackSpeed = speeds[nextIdx]
-                        exoPlayer.playbackParameters = PlaybackParameters(playbackSpeed)
-                    }
+                    .clickable { AudioPlayerController.cycleSpeed() }
                     .padding(horizontal = 11.dp, vertical = 6.dp)
             ) {
                 Text(
                     text = "${playbackSpeed}x",
-                    color = TextPrimary,
+                    color = AccentPeriwinkle,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 13.sp
                 )
             }
-
-            // For Video files, 3-dots button is in Top-Right (matching 1000043487.jpg!)
-            if (file.isVideo) {
-                Spacer(modifier = Modifier.width(4.dp))
-                IconButton(onClick = onOpenRouterSheet) {
-                    Icon(
-                        Icons.Default.MoreVert,
-                        contentDescription = "Open With or Share",
-                        tint = TextPrimary
-                    )
-                }
-            }
         }
 
-        // Main Stage
-        Box(
+        val infiniteTransition = rememberInfiniteTransition(label = "AudioPulse")
+        val pulseScale by infiniteTransition.animateFloat(
+            initialValue = 0.94f,
+            targetValue = if (isPlaying) 1.07f else 0.96f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(850, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "PulseScale"
+        )
+
+        Column(
             modifier = Modifier
                 .weight(1f)
-                .fillMaxWidth(),
-            contentAlignment = Alignment.Center
+                .fillMaxWidth()
+                .padding(horizontal = 28.dp, vertical = 28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween
         ) {
-            if (file.isVideo) {
-                AndroidView(
-                    factory = { ctx ->
-                        PlayerView(ctx).apply {
-                            player = exoPlayer
-                            useController = true
-                        }
-                    },
-                    update = { view ->
-                        if (view.player != exoPlayer) {
-                            view.player = exoPlayer
-                        }
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else {
-                // Dedicated Audio Player UI:
-                // Center circular waveform + bottom transport row with 3-dots on the right (matching 1000043485.jpg!)
-                val infiniteTransition = rememberInfiniteTransition(label = "AudioPulse")
-                val pulseScale by infiniteTransition.animateFloat(
-                    initialValue = 0.94f,
-                    targetValue = if (isPlaying) 1.07f else 0.96f,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(850, easing = FastOutSlowInEasing),
-                        repeatMode = RepeatMode.Reverse
-                    ),
-                    label = "PulseScale"
-                )
+            Spacer(modifier = Modifier.height(10.dp))
 
-                Column(
+            // Center Waveform & Track Info
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Box(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 28.dp, vertical = 28.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    // Center Waveform & Track Info
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(124.dp)
-                                .graphicsLayer {
-                                    scaleX = if (isPlaying) pulseScale else 1f
-                                    scaleY = if (isPlaying) pulseScale else 1f
-                                }
-                                .background(CardCharcoal, CircleShape)
-                                .border(1.5.dp, BorderHairline, CircleShape),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                Icons.Default.GraphicEq,
-                                contentDescription = null,
-                                tint = AccentTitanium,
-                                modifier = Modifier.size(54.dp)
-                            )
+                        .size(128.dp)
+                        .graphicsLayer {
+                            scaleX = if (isPlaying) pulseScale else 1f
+                            scaleY = if (isPlaying) pulseScale else 1f
                         }
-
-                        Text(
-                            text = file.name,
-                            color = TextPrimary,
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            textAlign = TextAlign.Center,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
-
-                        Text(
-                            text = "${file.extension} • ${file.sizeLabel}",
-                            color = TextSecondary,
-                            fontSize = 13.sp
-                        )
-                    }
-
-                    // Bottom Audio Transport Area
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        val total = durationMs.coerceAtLeast(1L)
-                        val progressFraction = (currentPosMs.toFloat() / total.toFloat()).coerceIn(0f, 1f)
-
-                        Slider(
-                            value = progressFraction,
-                            onValueChange = { frac ->
-                                val target = (frac * total).toLong()
-                                currentPosMs = target
-                                exoPlayer.seekTo(target)
-                            },
-                            colors = SliderDefaults.colors(
-                                thumbColor = AccentTitanium,
-                                activeTrackColor = AccentTitanium,
-                                inactiveTrackColor = CardElevated
-                            ),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text = formatDurationMs(currentPosMs),
-                                color = TextPrimary,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-                            Text(
-                                text = formatDurationMs(durationMs),
-                                color = TextSecondary,
-                                fontSize = 12.sp
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        // Symmetric Control Row:
-                        // Left spacer (for visual center balance) | Rewind | Play/Pause | Forward | Right 3-dots button (matching 1000043485.jpg!)
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            // Invisible balance box matching the right 3-dots button width so Play/Pause stays dead-center
-                            Spacer(modifier = Modifier.size(48.dp))
-
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(22.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(50.dp)
-                                        .background(CardCharcoal, RoundedCornerShape(16.dp))
-                                        .border(1.dp, BorderHairline, RoundedCornerShape(16.dp))
-                                        .clip(RoundedCornerShape(16.dp))
-                                        .clickable {
-                                            val nextPos = (exoPlayer.currentPosition - 10_000L).coerceAtLeast(0L)
-                                            exoPlayer.seekTo(nextPos)
-                                            currentPosMs = nextPos
-                                        },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        Icons.Default.FastRewind,
-                                        contentDescription = "Rewind 10s",
-                                        tint = TextPrimary,
-                                        modifier = Modifier.size(22.dp)
-                                    )
-                                }
-
-                                val btnScale by animateFloatAsState(
-                                    targetValue = if (isPlaying) 1f else 0.95f,
-                                    animationSpec = spring(stiffness = Spring.StiffnessMedium),
-                                    label = "PlayBtnScale"
-                                )
-                                Box(
-                                    modifier = Modifier
-                                        .size(66.dp)
-                                        .graphicsLayer {
-                                            scaleX = btnScale
-                                            scaleY = btnScale
-                                        }
-                                        .background(AccentTitanium, RoundedCornerShape(22.dp))
-                                        .clip(RoundedCornerShape(22.dp))
-                                        .clickable {
-                                            if (exoPlayer.isPlaying) {
-                                                exoPlayer.pause()
-                                            } else {
-                                                if (exoPlayer.playbackState == Player.STATE_ENDED) {
-                                                    exoPlayer.seekTo(0L)
-                                                }
-                                                exoPlayer.play()
-                                            }
-                                        },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Crossfade(targetState = isPlaying, animationSpec = tween(140), label = "PlayPauseIcon") { playing ->
-                                        Icon(
-                                            imageVector = if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                            contentDescription = "Play or Pause",
-                                            tint = AccentDarkInk,
-                                            modifier = Modifier.size(32.dp)
-                                        )
-                                    }
-                                }
-
-                                Box(
-                                    modifier = Modifier
-                                        .size(50.dp)
-                                        .background(CardCharcoal, RoundedCornerShape(16.dp))
-                                        .border(1.dp, BorderHairline, RoundedCornerShape(16.dp))
-                                        .clip(RoundedCornerShape(16.dp))
-                                        .clickable {
-                                            val nextPos = (exoPlayer.currentPosition + 10_000L).coerceAtMost(durationMs.coerceAtLeast(0L))
-                                            exoPlayer.seekTo(nextPos)
-                                            currentPosMs = nextPos
-                                        },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        Icons.Default.FastForward,
-                                        contentDescription = "Forward 10s",
-                                        tint = TextPrimary,
-                                        modifier = Modifier.size(22.dp)
-                                    )
-                                }
-                            }
-
-                            // 3-Dots Button on the right side of the transport row (Exact position drawn in 1000043485.jpg!)
-                            Box(
-                                modifier = Modifier
-                                    .size(48.dp)
-                                    .background(CardCharcoal, RoundedCornerShape(15.dp))
-                                    .border(1.dp, BorderHairline, RoundedCornerShape(15.dp))
-                                    .clip(RoundedCornerShape(15.dp))
-                                    .clickable { onOpenRouterSheet() },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    Icons.Default.MoreHoriz,
-                                    contentDescription = "Open With or Share",
-                                    tint = TextPrimary,
-                                    modifier = Modifier.size(22.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (playerErrorMsg != null) {
-                Column(
-                    modifier = Modifier
-                        .padding(24.dp)
-                        .fillMaxWidth()
-                        .background(SurfaceGraphite, RoundedCornerShape(16.dp))
-                        .border(1.dp, BorderHairline, RoundedCornerShape(16.dp))
-                        .padding(20.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                        .background(AccentContainerIndigo, CircleShape)
+                        .border(2.dp, AccentIndigo.copy(alpha = 0.65f), CircleShape),
+                    contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        Icons.Default.ErrorOutline,
+                        Icons.Default.GraphicEq,
                         contentDescription = null,
-                        tint = TextPrimary,
-                        modifier = Modifier.size(34.dp)
+                        tint = AccentPeriwinkle,
+                        modifier = Modifier.size(56.dp)
+                    )
+                }
+
+                Text(
+                    text = AudioPlayerController.trackTitle.ifBlank { file.name },
+                    color = TextPrimary,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                Text(
+                    text = AudioPlayerController.trackArtist.ifBlank { "${file.extension} • ${file.sizeLabel}" },
+                    color = TextSecondary,
+                    fontSize = 13.sp
+                )
+            }
+
+            // Bottom Audio Transport Area
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                val total = durationMs.coerceAtLeast(1L)
+                val progressFraction = (currentPosMs.toFloat() / total.toFloat()).coerceIn(0f, 1f)
+
+                Slider(
+                    value = progressFraction,
+                    onValueChange = { frac ->
+                        val target = (frac * total).toLong()
+                        AudioPlayerController.seekTo(target)
+                    },
+                    colors = SliderDefaults.colors(
+                        thumbColor = AccentPeriwinkle,
+                        activeTrackColor = AccentIndigo,
+                        inactiveTrackColor = CardElevated
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = formatDurationMs(currentPosMs),
+                        color = AccentPeriwinkle,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium
                     )
                     Text(
-                        text = if (isZh) "当前编码流需外部解码器播放" else "Stream requires external decoder",
-                        color = TextPrimary,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        text = playerErrorMsg ?: "",
+                        text = formatDurationMs(durationMs),
                         color = TextSecondary,
                         fontSize = 12.sp
                     )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Symmetric Control Row:
+                // Left balance spacer | Rewind | Play/Pause | Forward | Right 3-dots button (matching 1000043485.jpg!)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Spacer(modifier = Modifier.size(48.dp))
+
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(22.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(50.dp)
+                                .background(CardCharcoal, RoundedCornerShape(16.dp))
+                                .border(1.dp, BorderHairline, RoundedCornerShape(16.dp))
+                                .clip(RoundedCornerShape(16.dp))
+                                .clickable { AudioPlayerController.seekBy(-10_000L) },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Default.FastRewind,
+                                contentDescription = "Rewind 10s",
+                                tint = TextPrimary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+
+                        val btnScale by animateFloatAsState(
+                            targetValue = if (isPlaying) 1f else 0.95f,
+                            animationSpec = spring(stiffness = Spring.StiffnessMedium),
+                            label = "PlayBtnScale"
+                        )
+                        Box(
+                            modifier = Modifier
+                                .size(66.dp)
+                                .graphicsLayer {
+                                    scaleX = btnScale
+                                    scaleY = btnScale
+                                }
+                                .background(AccentIndigo, RoundedCornerShape(22.dp))
+                                .clip(RoundedCornerShape(22.dp))
+                                .clickable { AudioPlayerController.togglePlayPause(context) },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Crossfade(targetState = isPlaying, animationSpec = tween(140), label = "PlayPauseIcon") { playing ->
+                                Icon(
+                                    imageVector = if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                    contentDescription = "Play or Pause",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(32.dp)
+                                )
+                            }
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .size(50.dp)
+                                .background(CardCharcoal, RoundedCornerShape(16.dp))
+                                .border(1.dp, BorderHairline, RoundedCornerShape(16.dp))
+                                .clip(RoundedCornerShape(16.dp))
+                                .clickable { AudioPlayerController.seekBy(10_000L) },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Default.FastForward,
+                                contentDescription = "Forward 10s",
+                                tint = TextPrimary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                    }
+
+                    // 3-Dots Button on the right side of the transport row (matching 1000043485.jpg!)
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .background(CardCharcoal, RoundedCornerShape(15.dp))
+                            .border(1.dp, BorderHairline, RoundedCornerShape(15.dp))
+                            .clip(RoundedCornerShape(15.dp))
+                            .clickable { onOpenRouterSheet() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Default.MoreHoriz,
+                            contentDescription = "Open With or Share",
+                            tint = TextPrimary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
                 }
             }
         }
@@ -1566,9 +1687,7 @@ fun BuiltInMediaPlayerScreen(
 }
 
 // =============================================================================
-// 2. BUILT-IN IMAGE VIEWER SCREEN
-// - 3-dots button placed at Top-Right (matching 1000043481.jpg!)
-// - Bottom giant bar completely removed!
+// 2. BUILT-IN IMAGE VIEWER SCREEN (Top-Right 3-dots button)
 // =============================================================================
 @Composable
 fun BuiltInImageViewerScreen(
@@ -1645,7 +1764,7 @@ fun BuiltInImageViewerScreen(
                 )
                 Text(
                     text = "${file.extension} • ${file.sizeLabel} • ${file.mimeType}",
-                    color = TextSecondary,
+                    color = AccentPeriwinkle,
                     fontSize = 11.sp,
                     maxLines = 1
                 )
@@ -1657,7 +1776,6 @@ fun BuiltInImageViewerScreen(
                 Icon(Icons.Default.RotateRight, contentDescription = "Rotate", tint = TextSecondary)
             }
 
-            // 3-Dots Button at Top-Right (matching 1000043481.jpg!)
             IconButton(onClick = onOpenRouterSheet) {
                 Icon(Icons.Default.MoreVert, contentDescription = "Open With or Share", tint = TextPrimary)
             }
@@ -1717,7 +1835,7 @@ fun BuiltInImageViewerScreen(
                     )
                 }
                 else -> {
-                    CircularProgressIndicator(color = AccentTitanium)
+                    CircularProgressIndicator(color = AccentIndigo)
                 }
             }
         }
@@ -1725,10 +1843,7 @@ fun BuiltInImageViewerScreen(
 }
 
 // =============================================================================
-// 3. EXPANDED UNSUPPORTED FILE SCREEN
-// - 3-dots button placed at Top-Right (matching 1000043483.jpg!)
-// - Bottom giant bar completely removed!
-// - Compact info header so all Pinned & Frequent app icons display cleanly without clipping!
+// 3. EXPANDED UNSUPPORTED FILE SCREEN (Top-Right 3-dots button)
 // =============================================================================
 @Composable
 fun ExpandedUnsupportedFileScreen(
@@ -1775,13 +1890,12 @@ fun ExpandedUnsupportedFileScreen(
                 )
                 Text(
                     text = "${file.extension} • ${file.sizeLabel} • ${file.mimeType}",
-                    color = TextSecondary,
+                    color = AccentPeriwinkle,
                     fontSize = 11.sp,
                     maxLines = 1
                 )
             }
 
-            // 3-Dots Button at Top-Right (matching 1000043483.jpg!)
             IconButton(onClick = onOpenRouterSheet) {
                 Icon(Icons.Default.MoreVert, contentDescription = "Open With or Share", tint = TextPrimary)
             }
@@ -1794,7 +1908,6 @@ fun ExpandedUnsupportedFileScreen(
                 .padding(horizontal = 18.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Compact, refined file status card
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1807,12 +1920,12 @@ fun ExpandedUnsupportedFileScreen(
                     Box(
                         modifier = Modifier
                             .size(42.dp)
-                            .background(CardElevated, RoundedCornerShape(10.dp)),
+                            .background(AccentContainerIndigo, RoundedCornerShape(10.dp)),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
                             text = file.extension,
-                            color = AccentTitanium,
+                            color = AccentPeriwinkle,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold
                         )
@@ -1848,7 +1961,7 @@ fun ExpandedUnsupportedFileScreen(
                 )
                 Text(
                     text = "${file.sizeLabel} • ${file.mimeType}",
-                    color = TextSecondary,
+                    color = AccentPeriwinkle,
                     fontSize = 11.sp
                 )
             }
@@ -1878,7 +1991,7 @@ fun ExpandedUnsupportedFileScreen(
                                 .background(CardCharcoal, RoundedCornerShape(14.dp))
                                 .border(
                                     1.dp,
-                                    if (app.isPinned) AccentTitanium.copy(alpha = 0.45f) else BorderHairline,
+                                    if (app.isPinned) AccentIndigo.copy(alpha = 0.55f) else BorderHairline,
                                     RoundedCornerShape(14.dp)
                                 )
                                 .clickable {
@@ -1903,7 +2016,7 @@ fun ExpandedUnsupportedFileScreen(
                                 Icon(
                                     Icons.Default.Apps,
                                     contentDescription = null,
-                                    tint = AccentTitanium,
+                                    tint = AccentPeriwinkle,
                                     modifier = Modifier.size(38.dp)
                                 )
                             }
@@ -1925,8 +2038,6 @@ fun ExpandedUnsupportedFileScreen(
 
 // =============================================================================
 // 4. IN-WINDOW 120FPS APP ROUTER SHEET
-// - Zero offscreen .clip() layers on list rows!
-// - Fixed-height rows + pre-sorted lowercase labels + Release-level JIT enabled!
 // =============================================================================
 @Composable
 fun TelegramStyleAppRouterSheet(
@@ -1996,12 +2107,12 @@ fun TelegramStyleAppRouterSheet(
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             val openTabBg by animateColorAsState(
-                targetValue = if (!forShare) AccentTitanium else Color.Transparent,
+                targetValue = if (!forShare) AccentIndigo else Color.Transparent,
                 animationSpec = tween(150),
                 label = "OpenTabBg"
             )
             val shareTabBg by animateColorAsState(
-                targetValue = if (forShare) AccentTitanium else Color.Transparent,
+                targetValue = if (forShare) AccentIndigo else Color.Transparent,
                 animationSpec = tween(150),
                 label = "ShareTabBg"
             )
@@ -2023,7 +2134,7 @@ fun TelegramStyleAppRouterSheet(
                 ) {
                     Text(
                         text = if (isZh) "用其他应用打开" else "Open With",
-                        color = if (!forShare) AccentDarkInk else TextSecondary,
+                        color = if (!forShare) Color.White else TextSecondary,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1
@@ -2035,11 +2146,11 @@ fun TelegramStyleAppRouterSheet(
                         .fillMaxHeight()
                         .background(shareTabBg, RoundedCornerShape(10.dp))
                         .clickable { forShare = true },
-                    contentAlignment = Alignment.Center
+                        contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = if (isZh) "分享给..." else "Share To...",
-                        color = if (forShare) AccentDarkInk else TextSecondary,
+                        color = if (forShare) Color.White else TextSecondary,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1
@@ -2051,7 +2162,7 @@ fun TelegramStyleAppRouterSheet(
                 Icon(
                     Icons.Default.DeleteOutline,
                     contentDescription = "Remove Record",
-                    tint = TextSecondary
+                    tint = Color(0xFFF87171)
                 )
             }
 
@@ -2092,8 +2203,8 @@ fun TelegramStyleAppRouterSheet(
                 checked = includeAllApps,
                 onCheckedChange = { includeAllApps = it },
                 colors = SwitchDefaults.colors(
-                    checkedThumbColor = AccentDarkInk,
-                    checkedTrackColor = AccentTitanium,
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = AccentIndigo,
                     uncheckedThumbColor = TextSecondary,
                     uncheckedTrackColor = CardCharcoal
                 )
@@ -2127,7 +2238,7 @@ fun TelegramStyleAppRouterSheet(
                     onValueChange = { appSearch = it },
                     singleLine = true,
                     textStyle = TextStyle(color = TextPrimary, fontSize = 13.sp),
-                    cursorBrush = SolidColor(AccentTitanium),
+                    cursorBrush = SolidColor(AccentPeriwinkle),
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -2140,7 +2251,6 @@ fun TelegramStyleAppRouterSheet(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        // Zero-clip, fixed-height rows for 120fps scrolling
         LazyColumn(
             verticalArrangement = Arrangement.spacedBy(6.dp),
             contentPadding = PaddingValues(bottom = 28.dp),
@@ -2151,7 +2261,7 @@ fun TelegramStyleAppRouterSheet(
                 key = { it.packageName },
                 contentType = { "app_row" }
             ) { app ->
-                val rowBg = if (app.isPinned) CardElevated else CardCharcoal
+                val rowBg = if (app.isPinned) AccentContainerIndigo else CardCharcoal
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -2180,7 +2290,7 @@ fun TelegramStyleAppRouterSheet(
                         Icon(
                             Icons.Default.Android,
                             contentDescription = null,
-                            tint = AccentTitanium,
+                            tint = AccentPeriwinkle,
                             modifier = Modifier.size(36.dp)
                         )
                     }
@@ -2201,7 +2311,7 @@ fun TelegramStyleAppRouterSheet(
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
                                     text = if (isZh) "置顶" else "PINNED",
-                                    color = AccentTitanium,
+                                    color = AccentPeriwinkle,
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold
                                 )
@@ -2233,7 +2343,7 @@ fun TelegramStyleAppRouterSheet(
                         Icon(
                             imageVector = if (app.isPinned) Icons.Default.PushPin else Icons.Default.StarBorder,
                             contentDescription = "Pin",
-                            tint = if (app.isPinned) AccentTitanium else TextSecondary
+                            tint = if (app.isPinned) AccentPeriwinkle else TextSecondary
                         )
                     }
                 }
