@@ -11,8 +11,8 @@ android {
         applicationId = "com.omnimedia.hub"
         minSdk = 26
         targetSdk = 34
-        versionCode = 8
-        versionName = "7.0.0"
+        versionCode = 9
+        versionName = "8.0.0"
 
         vectorDrawables {
             useSupportLibrary = true

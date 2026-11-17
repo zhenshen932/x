@@ -2037,7 +2037,7 @@ fun ExpandedUnsupportedFileScreen(
             fileName = file.name,
             mimeType = file.mimeType,
             forShare = false,
-            includeAllApps = true
+            includeAllApps = routerManager.isIncludeAllAppsPreferred()
         ).take(12)
     }
 
@@ -2232,7 +2232,7 @@ fun TelegramStyleAppRouterSheet(
     BackHandler(onBack = onDismiss)
 
     var forShare by remember { mutableStateOf(initialShareMode) }
-    var includeAllApps by remember { mutableStateOf(true) }
+    var includeAllApps by remember { mutableStateOf(routerManager.isIncludeAllAppsPreferred()) }
     var appSearch by remember { mutableStateOf("") }
     var refreshTrigger by remember { mutableIntStateOf(0) }
 
@@ -2321,9 +2321,10 @@ fun TelegramStyleAppRouterSheet(
                     Text(
                         text = if (isZh) "用其他应用打开" else "Open With",
                         color = if (!forShare) TextPrimary else TextSecondary,
-                        fontSize = 13.sp,
+                        fontSize = 12.sp,
                         fontWeight = if (!forShare) FontWeight.SemiBold else FontWeight.Normal,
-                        maxLines = 1
+                        maxLines = 1,
+                        modifier = Modifier.padding(horizontal = 4.dp)
                     )
                 }
                 Box(
@@ -2380,7 +2381,11 @@ fun TelegramStyleAppRouterSheet(
                 .fillMaxWidth()
                 .background(CardSoftCharcoal, RoundedCornerShape(12.dp))
                 .border(1.dp, BorderSoftHairline, RoundedCornerShape(12.dp))
-                .clickable { includeAllApps = !includeAllApps }
+                .clickable {
+                    val next = !includeAllApps
+                    includeAllApps = next
+                    routerManager.setIncludeAllAppsPreferred(next)
+                }
                 .padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
@@ -2393,7 +2398,10 @@ fun TelegramStyleAppRouterSheet(
             )
             Switch(
                 checked = includeAllApps,
-                onCheckedChange = { includeAllApps = it },
+                onCheckedChange = { next ->
+                    includeAllApps = next
+                    routerManager.setIncludeAllAppsPreferred(next)
+                },
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = TextPrimary,
                     checkedTrackColor = ActivePillSlate,

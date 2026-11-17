@@ -214,6 +214,16 @@ class AppRouterManager(private val context: Context) {
         prefs.edit().putBoolean("pref_sort_desc", desc).apply()
     }
 
+    fun isIncludeAllAppsPreferred(): Boolean = prefs.getBoolean("pref_include_all_apps", true)
+    fun setIncludeAllAppsPreferred(includeAll: Boolean) {
+        prefs.edit().putBoolean("pref_include_all_apps", includeAll).apply()
+    }
+
+    fun isRepeatOnePreferred(): Boolean = prefs.getBoolean("pref_repeat_one", false)
+    fun setRepeatOnePreferred(repeatOne: Boolean) {
+        prefs.edit().putBoolean("pref_repeat_one", repeatOne).apply()
+    }
+
     fun loadRecentFiles(): List<RecentFileEntry> {
         val raw = prefs.getString("recent_files_json", null) ?: return emptyList()
         val list = mutableListOf<RecentFileEntry>()
@@ -358,7 +368,9 @@ class AppRouterManager(private val context: Context) {
             val sourceList = if (includeAllApps) {
                 currentCache
             } else {
-                currentCache.filter { exactPkgs.contains(it.packageName) }
+                currentCache.filter {
+                    exactPkgs.contains(it.packageName) || isPinned(it.packageName) || getUsageCount(it.packageName) > 0
+                }
             }
 
             val result = ArrayList<ExternalAppTarget>(sourceList.size)
