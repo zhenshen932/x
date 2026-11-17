@@ -20,6 +20,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
@@ -35,6 +36,7 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -62,6 +64,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -72,9 +75,11 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
@@ -89,18 +94,22 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.sin
 
-// Deep Carbon Dark with Refined Indigo-Periwinkle & Jewel-Tone Accents (Eliminating ugly flat grey blocks!)
-private val BgCarbon = Color(0xFF0B0C10)
-private val SurfaceGraphite = Color(0xFF13151C)
-private val CardCharcoal = Color(0xFF191C26)
-private val CardElevated = Color(0xFF232736)
-private val BorderHairline = Color(0xFF2A2F40)
-private val AccentIndigo = Color(0xFF6366F1)
-private val AccentPeriwinkle = Color(0xFF818CF8)
-private val AccentContainerIndigo = Color(0xFF232645)
-private val TextPrimary = Color(0xFFF4F5F8)
-private val TextSecondary = Color(0xFF9499AD)
+// Soft, Comfortable Monochrome Charcoal & Warm Slate Palette
+// - Replaces harsh pure black/glaring white with soothing warm charcoal surfaces
+// - Selected pills/buttons use a comfortable Slate-Graphite (#2F323A) with a crisp #4A4E59 border and soft white text (#F2F3F5), NEVER blinding light-grey with unreadable white text!
+private val BgSoftCarbon = Color(0xFF0E0F12)
+private val SurfaceSoftGraphite = Color(0xFF15171B)
+private val CardSoftCharcoal = Color(0xFF1B1D22)
+private val CardElevatedSlate = Color(0xFF252830)
+private val ActivePillSlate = Color(0xFF323640)
+private val ActivePillBorder = Color(0xFF4C5260)
+private val BorderSoftHairline = Color(0xFF282B33)
+private val AccentSoftSilver = Color(0xFFE6E8EC)
+private val AccentDarkCharcoal = Color(0xFF111215)
+private val TextPrimary = Color(0xFFF0F2F5)
+private val TextSecondary = Color(0xFF9095A0)
 
 sealed class ActivePage {
     object Home : ActivePage()
@@ -108,6 +117,59 @@ sealed class ActivePage {
     data class AudioPlayer(val file: RecentFileEntry) : ActivePage()
     data class ImageViewer(val file: RecentFileEntry) : ActivePage()
     data class UnsupportedFileView(val file: RecentFileEntry) : ActivePage()
+}
+
+// =============================================================================
+// DYNAMIC MULTI-BAR ANIMATED AUDIO WAVEFORM COMPONENT
+// Animates individual vertical frequency bars smoothly when playing!
+// =============================================================================
+@Composable
+fun AnimatedAudioWaveform(
+    isPlaying: Boolean,
+    modifier: Modifier = Modifier,
+    barColor: Color = AccentSoftSilver,
+    barCount: Int = 5,
+    strokeWidth: Dp = 3.dp
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "WaveformLoop")
+    val phase by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 6.2831855f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 950, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "WavePhase"
+    )
+
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val spacing = w / (barCount + 1)
+        val strokePx = strokeWidth.toPx()
+        val baseRatios = floatArrayOf(0.38f, 0.68f, 0.92f, 0.62f, 0.42f, 0.75f, 0.48f)
+
+        for (i in 0 until barCount) {
+            val x = spacing * (i + 1)
+            val ratio = if (isPlaying) {
+                val wave1 = sin(phase + i * 1.15f)
+                val wave2 = sin(phase * 2.0f - i * 0.85f)
+                (0.26f + 0.68f * ((wave1 * 0.6f + wave2 * 0.4f + 1f) * 0.5f)).coerceIn(0.2f, 0.96f)
+            } else {
+                baseRatios[i % baseRatios.size] * 0.55f
+            }
+            val barH = (h * ratio).coerceAtLeast(strokePx * 1.2f)
+            val topY = (h - barH) / 2f
+            val bottomY = topY + barH
+            drawLine(
+                color = barColor,
+                start = Offset(x, topY),
+                end = Offset(x, bottomY),
+                strokeWidth = strokePx,
+                cap = StrokeCap.Round
+            )
+        }
+    }
 }
 
 class MainActivity : ComponentActivity() {
@@ -122,11 +184,11 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val scheme = darkColorScheme(
-                background = BgCarbon,
-                surface = SurfaceGraphite,
-                surfaceVariant = CardCharcoal,
-                primary = AccentIndigo,
-                secondaryContainer = AccentContainerIndigo,
+                background = BgSoftCarbon,
+                surface = SurfaceSoftGraphite,
+                surfaceVariant = CardSoftCharcoal,
+                primary = AccentSoftSilver,
+                secondaryContainer = ActivePillSlate,
                 onBackground = TextPrimary,
                 onSurface = TextPrimary
             )
@@ -180,7 +242,6 @@ fun OmniMediaAppContent(
     val routerManager = remember { AppRouterManager(context) }
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 
-    // Request notification permission on Android 13+ so background audio notification always appears
     val notifPermLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) {}
@@ -310,13 +371,13 @@ fun OmniMediaAppContent(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(BgCarbon)) {
+    Box(modifier = Modifier.fillMaxSize().background(BgSoftCarbon)) {
         ModalNavigationDrawer(
             drawerState = drawerState,
             gesturesEnabled = activePage is ActivePage.Home && routerSheetTargetFile == null,
             drawerContent = {
                 ModalDrawerSheet(
-                    drawerContainerColor = SurfaceGraphite,
+                    drawerContainerColor = SurfaceSoftGraphite,
                     drawerContentColor = TextPrimary,
                     modifier = Modifier.width(275.dp)
                 ) {
@@ -330,14 +391,15 @@ fun OmniMediaAppContent(
                         Box(
                             modifier = Modifier
                                 .size(40.dp)
-                                .background(AccentIndigo, RoundedCornerShape(12.dp)),
+                                .background(ActivePillSlate, RoundedCornerShape(12.dp))
+                                .border(1.dp, ActivePillBorder, RoundedCornerShape(12.dp)),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 Icons.Default.PlayArrow,
                                 contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(24.dp)
+                                tint = TextPrimary,
+                                modifier = Modifier.size(22.dp)
                             )
                         }
                         Spacer(modifier = Modifier.width(14.dp))
@@ -350,7 +412,7 @@ fun OmniMediaAppContent(
                         )
                     }
 
-                    HorizontalDivider(color = BorderHairline, modifier = Modifier.padding(vertical = 10.dp))
+                    HorizontalDivider(color = BorderSoftHairline, modifier = Modifier.padding(vertical = 10.dp))
 
                     val navItems = listOf(
                         Triple("all", if (isZh) "最近打开的全部文件" else "All Recent Files", Icons.Default.History),
@@ -377,10 +439,10 @@ fun OmniMediaAppContent(
                                 scope.launch { drawerState.close() }
                             },
                             colors = NavigationDrawerItemDefaults.colors(
-                                selectedContainerColor = AccentContainerIndigo,
-                                selectedTextColor = AccentPeriwinkle,
-                                selectedIconColor = AccentPeriwinkle,
-                                unselectedTextColor = TextPrimary,
+                                selectedContainerColor = ActivePillSlate,
+                                selectedTextColor = TextPrimary,
+                                selectedIconColor = TextPrimary,
+                                unselectedTextColor = TextSecondary,
                                 unselectedIconColor = TextSecondary
                             ),
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 3.dp)
@@ -388,7 +450,7 @@ fun OmniMediaAppContent(
                     }
 
                     Spacer(modifier = Modifier.weight(1f))
-                    HorizontalDivider(color = BorderHairline)
+                    HorizontalDivider(color = BorderSoftHairline)
 
                     Row(
                         modifier = Modifier
@@ -397,21 +459,23 @@ fun OmniMediaAppContent(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        FilledTonalButton(
-                            onClick = {
-                                lang = if (lang == "zh") "en" else "zh"
-                                routerManager.setLanguage(lang)
-                            },
-                            colors = ButtonDefaults.filledTonalButtonColors(
-                                containerColor = CardCharcoal,
-                                contentColor = TextPrimary
-                            ),
-                            shape = RoundedCornerShape(12.dp)
+                        Box(
+                            modifier = Modifier
+                                .background(CardElevatedSlate, RoundedCornerShape(12.dp))
+                                .border(1.dp, BorderSoftHairline, RoundedCornerShape(12.dp))
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable {
+                                    lang = if (lang == "zh") "en" else "zh"
+                                    routerManager.setLanguage(lang)
+                                }
+                                .padding(horizontal = 14.dp, vertical = 9.dp)
                         ) {
-                            Icon(Icons.Default.Language, contentDescription = null, modifier = Modifier.size(17.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Crossfade(targetState = isZh, animationSpec = tween(150), label = "LangBtn") { zh ->
-                                Text(if (zh) "English" else "简体中文", fontSize = 13.sp, maxLines = 1)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Language, contentDescription = null, tint = TextPrimary, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Crossfade(targetState = isZh, animationSpec = tween(150), label = "LangBtn") { zh ->
+                                    Text(if (zh) "English" else "简体中文", color = TextPrimary, fontSize = 13.sp, maxLines = 1)
+                                }
                             }
                         }
 
@@ -424,7 +488,7 @@ fun OmniMediaAppContent(
                         ) {
                             Text(
                                 text = if (isZh) "清空记录" else "Clear",
-                                color = Color(0xFFF87171),
+                                color = TextSecondary,
                                 fontSize = 13.sp,
                                 maxLines = 1
                             )
@@ -434,14 +498,16 @@ fun OmniMediaAppContent(
             }
         ) {
             Scaffold(
-                containerColor = BgCarbon,
+                containerColor = BgSoftCarbon,
                 floatingActionButton = {
                     FloatingActionButton(
                         onClick = { documentPickerLauncher.launch(arrayOf("*/*")) },
                         shape = RoundedCornerShape(18.dp),
-                        containerColor = AccentIndigo,
-                        contentColor = Color.White,
-                        modifier = Modifier.size(58.dp)
+                        containerColor = ActivePillSlate,
+                        contentColor = TextPrimary,
+                        modifier = Modifier
+                            .size(58.dp)
+                            .border(1.dp, ActivePillBorder, RoundedCornerShape(18.dp))
                     ) {
                         Icon(Icons.Default.Add, contentDescription = "Open File", modifier = Modifier.size(26.dp))
                     }
@@ -474,8 +540,8 @@ fun OmniMediaAppContent(
                             modifier = Modifier
                                 .weight(1f)
                                 .height(46.dp)
-                                .background(SurfaceGraphite, RoundedCornerShape(23.dp))
-                                .border(1.dp, BorderHairline, RoundedCornerShape(23.dp))
+                                .background(SurfaceSoftGraphite, RoundedCornerShape(23.dp))
+                                .border(1.dp, BorderSoftHairline, RoundedCornerShape(23.dp))
                                 .padding(start = 18.dp, end = 6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -500,7 +566,7 @@ fun OmniMediaAppContent(
                                         fontSize = 15.sp,
                                         fontFamily = FontFamily.Default
                                     ),
-                                    cursorBrush = SolidColor(AccentPeriwinkle),
+                                    cursorBrush = SolidColor(TextPrimary),
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             }
@@ -522,7 +588,7 @@ fun OmniMediaAppContent(
                             Box(
                                 modifier = Modifier
                                     .size(34.dp)
-                                    .background(CardElevated, CircleShape)
+                                    .background(CardElevatedSlate, CircleShape)
                                     .clip(CircleShape)
                                     .clickable { documentPickerLauncher.launch(arrayOf("*/*")) },
                                 contentAlignment = Alignment.Center
@@ -530,7 +596,7 @@ fun OmniMediaAppContent(
                                 Icon(
                                     Icons.Default.FolderOpen,
                                     contentDescription = "Open File",
-                                    tint = AccentPeriwinkle,
+                                    tint = TextPrimary,
                                     modifier = Modifier.size(18.dp)
                                 )
                             }
@@ -541,8 +607,8 @@ fun OmniMediaAppContent(
                         Box(
                             modifier = Modifier
                                 .size(38.dp)
-                                .background(SurfaceGraphite, CircleShape)
-                                .border(1.dp, BorderHairline, CircleShape)
+                                .background(SurfaceSoftGraphite, CircleShape)
+                                .border(1.dp, BorderSoftHairline, CircleShape)
                                 .clip(CircleShape)
                                 .clickable { showSettingsDialog = true },
                             contentAlignment = Alignment.Center
@@ -550,7 +616,7 @@ fun OmniMediaAppContent(
                             Icon(
                                 Icons.Default.Tune,
                                 contentDescription = "Settings",
-                                tint = AccentPeriwinkle,
+                                tint = TextPrimary,
                                 modifier = Modifier.size(18.dp)
                             )
                         }
@@ -596,8 +662,8 @@ fun OmniMediaAppContent(
                             Box(
                                 modifier = Modifier
                                     .size(28.dp)
-                                    .background(CardCharcoal, CircleShape)
-                                    .border(1.dp, BorderHairline, CircleShape)
+                                    .background(CardSoftCharcoal, CircleShape)
+                                    .border(1.dp, BorderSoftHairline, CircleShape)
                                     .clip(CircleShape)
                                     .clickable {
                                         val nextDesc = !sortDescending
@@ -609,7 +675,7 @@ fun OmniMediaAppContent(
                                 Icon(
                                     Icons.Default.ArrowDownward,
                                     contentDescription = "Sort Order",
-                                    tint = AccentPeriwinkle,
+                                    tint = TextPrimary,
                                     modifier = Modifier
                                         .size(15.dp)
                                         .graphicsLayer { rotationZ = arrowRotation }
@@ -617,20 +683,21 @@ fun OmniMediaAppContent(
                             }
                         }
 
+                        // Soft Monochrome Segmented Toggle (Comfortable Warm Slate active pill with clear white icon)
                         val listBg by animateColorAsState(
-                            targetValue = if (!isGridView) AccentIndigo else Color.Transparent,
+                            targetValue = if (!isGridView) ActivePillSlate else Color.Transparent,
                             animationSpec = tween(160),
                             label = "ListBg"
                         )
                         val gridBg by animateColorAsState(
-                            targetValue = if (isGridView) AccentIndigo else Color.Transparent,
+                            targetValue = if (isGridView) ActivePillSlate else Color.Transparent,
                             animationSpec = tween(160),
                             label = "GridBg"
                         )
                         Row(
                             modifier = Modifier
-                                .background(SurfaceGraphite, RoundedCornerShape(16.dp))
-                                .border(1.dp, BorderHairline, RoundedCornerShape(16.dp))
+                                .background(SurfaceSoftGraphite, RoundedCornerShape(16.dp))
+                                .border(1.dp, BorderSoftHairline, RoundedCornerShape(16.dp))
                                 .padding(2.dp)
                         ) {
                             Box(
@@ -649,7 +716,7 @@ fun OmniMediaAppContent(
                                 Icon(
                                     Icons.Default.FormatListBulleted,
                                     contentDescription = "List View",
-                                    tint = if (!isGridView) Color.White else TextSecondary,
+                                    tint = if (!isGridView) TextPrimary else TextSecondary,
                                     modifier = Modifier.size(18.dp)
                                 )
                             }
@@ -669,16 +736,16 @@ fun OmniMediaAppContent(
                                 Icon(
                                     Icons.Default.GridView,
                                     contentDescription = "Grid View",
-                                    tint = if (isGridView) Color.White else TextSecondary,
+                                    tint = if (isGridView) TextPrimary else TextSecondary,
                                     modifier = Modifier.size(18.dp)
                                 )
                             }
                         }
                     }
 
-                    HorizontalDivider(color = BorderHairline, thickness = 1.dp)
+                    HorizontalDivider(color = BorderSoftHairline, thickness = 1.dp)
 
-                    // Background Audio Mini-Player Bar (when audio is playing in background on Home screen)
+                    // Sleek Soft-Monochrome In-App Mini-Player Bar (Fixed 1000043499.jpg: live animated waveform + Close 'X' button!)
                     val bgAudioFile = AudioPlayerController.currentFile
                     AnimatedVisibility(visible = bgAudioFile != null) {
                         if (bgAudioFile != null) {
@@ -686,18 +753,26 @@ fun OmniMediaAppContent(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(horizontal = 14.dp, vertical = 8.dp)
-                                    .background(AccentContainerIndigo, RoundedCornerShape(14.dp))
-                                    .border(1.dp, AccentIndigo.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
+                                    .background(CardSoftCharcoal, RoundedCornerShape(16.dp))
+                                    .border(1.dp, BorderSoftHairline, RoundedCornerShape(16.dp))
                                     .clickable { activePage = ActivePage.AudioPlayer(bgAudioFile) }
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    .padding(start = 12.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(
-                                    Icons.Default.GraphicEq,
-                                    contentDescription = null,
-                                    tint = AccentPeriwinkle,
-                                    modifier = Modifier.size(22.dp)
-                                )
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .background(CardElevatedSlate, RoundedCornerShape(10.dp)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    AnimatedAudioWaveform(
+                                        isPlaying = AudioPlayerController.isPlaying,
+                                        modifier = Modifier.size(20.dp),
+                                        barColor = TextPrimary,
+                                        barCount = 4,
+                                        strokeWidth = 2.dp
+                                    )
+                                }
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
@@ -712,14 +787,9 @@ fun OmniMediaAppContent(
                                         text = AudioPlayerController.trackArtist.ifBlank { bgAudioFile.extension },
                                         color = TextSecondary,
                                         fontSize = 11.sp,
-                                        maxLines = 1
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
-                                }
-                                IconButton(
-                                    onClick = { AudioPlayerController.skipPrev(context) },
-                                    modifier = Modifier.size(32.dp)
-                                ) {
-                                    Icon(Icons.Default.SkipPrevious, contentDescription = "Prev", tint = TextPrimary)
                                 }
                                 IconButton(
                                     onClick = { AudioPlayerController.togglePlayPause(context) },
@@ -727,15 +797,33 @@ fun OmniMediaAppContent(
                                 ) {
                                     Icon(
                                         if (AudioPlayerController.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                        contentDescription = "Play/Pause",
-                                        tint = AccentPeriwinkle
+                                        contentDescription = "Play or Pause",
+                                        tint = TextPrimary,
+                                        modifier = Modifier.size(20.dp)
                                     )
                                 }
                                 IconButton(
                                     onClick = { AudioPlayerController.skipNext(context) },
                                     modifier = Modifier.size(32.dp)
                                 ) {
-                                    Icon(Icons.Default.SkipNext, contentDescription = "Next", tint = TextPrimary)
+                                    Icon(
+                                        Icons.Default.SkipNext,
+                                        contentDescription = "Next",
+                                        tint = TextSecondary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                                // Close Button ('X') to stop background audio & dismiss bar
+                                IconButton(
+                                    onClick = { AudioPlayerController.stopAndDismiss(context) },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Close Audio Player",
+                                        tint = TextSecondary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
                                 }
                             }
                         }
@@ -797,14 +885,14 @@ fun OmniMediaAppContent(
                                     Box(
                                         modifier = Modifier
                                             .size(68.dp)
-                                            .background(SurfaceGraphite, CircleShape)
-                                            .border(1.dp, BorderHairline, CircleShape),
+                                            .background(SurfaceSoftGraphite, CircleShape)
+                                            .border(1.dp, BorderSoftHairline, CircleShape),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Icon(
                                             Icons.Default.FolderOpen,
                                             contentDescription = null,
-                                            tint = AccentPeriwinkle,
+                                            tint = TextSecondary,
                                             modifier = Modifier.size(30.dp)
                                         )
                                     }
@@ -1000,84 +1088,148 @@ fun OmniMediaAppContent(
         }
     }
 
+    // Custom Settings Dialog (Fixed 1000043491.jpg: No glaring white-on-white button, no text wrapping!)
     if (showSettingsDialog) {
-        AlertDialog(
-            onDismissRequest = { showSettingsDialog = false },
-            containerColor = SurfaceGraphite,
-            titleContentColor = TextPrimary,
-            textContentColor = TextSecondary,
-            title = {
-                Text(if (isZh) "设置与默认打开方式" else "Settings & Default Handler")
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(
-                        text = if (isZh) "界面语言 (Language)" else "Interface Language",
-                        color = TextPrimary,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Button(
-                            onClick = {
+        Dialog(onDismissRequest = { showSettingsDialog = false }) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(SurfaceSoftGraphite, RoundedCornerShape(24.dp))
+                    .border(1.dp, BorderSoftHairline, RoundedCornerShape(24.dp))
+                    .padding(22.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text(
+                    text = if (isZh) "设置与默认打开方式" else "Settings & Default Handler",
+                    color = TextPrimary,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Text(
+                    text = if (isZh) "界面语言 (Language)" else "Interface Language",
+                    color = TextSecondary,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium
+                )
+
+                // Segmented Language Selector with soft slate active highlight & crisp white text
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp)
+                        .background(BgSoftCarbon, RoundedCornerShape(14.dp))
+                        .border(1.dp, BorderSoftHairline, RoundedCornerShape(14.dp))
+                        .padding(3.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .background(
+                                if (isZh) ActivePillSlate else Color.Transparent,
+                                RoundedCornerShape(11.dp)
+                            )
+                            .border(
+                                width = if (isZh) 1.dp else 0.dp,
+                                color = if (isZh) ActivePillBorder else Color.Transparent,
+                                shape = RoundedCornerShape(11.dp)
+                            )
+                            .clip(RoundedCornerShape(11.dp))
+                            .clickable {
                                 lang = "zh"
                                 routerManager.setLanguage("zh")
                             },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isZh) AccentIndigo else CardCharcoal,
-                                contentColor = Color.White
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "简体中文",
+                            color = if (isZh) TextPrimary else TextSecondary,
+                            fontSize = 14.sp,
+                            fontWeight = if (isZh) FontWeight.SemiBold else FontWeight.Normal,
+                            maxLines = 1
+                        )
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .background(
+                                if (!isZh) ActivePillSlate else Color.Transparent,
+                                RoundedCornerShape(11.dp)
                             )
-                        ) {
-                            Text("简体中文")
-                        }
-                        Button(
-                            onClick = {
+                            .border(
+                                width = if (!isZh) 1.dp else 0.dp,
+                                color = if (!isZh) ActivePillBorder else Color.Transparent,
+                                shape = RoundedCornerShape(11.dp)
+                            )
+                            .clip(RoundedCornerShape(11.dp))
+                            .clickable {
                                 lang = "en"
                                 routerManager.setLanguage("en")
                             },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (!isZh) AccentIndigo else CardCharcoal,
-                                contentColor = Color.White
-                            )
-                        ) {
-                            Text("English")
-                        }
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "English",
+                            color = if (!isZh) TextPrimary else TextSecondary,
+                            fontSize = 14.sp,
+                            fontWeight = if (!isZh) FontWeight.SemiBold else FontWeight.Normal,
+                            maxLines = 1
+                        )
                     }
+                }
 
-                    HorizontalDivider(color = BorderHairline)
+                HorizontalDivider(color = BorderSoftHairline)
 
-                    FilledTonalButton(
-                        onClick = {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(46.dp)
+                        .background(CardSoftCharcoal, RoundedCornerShape(14.dp))
+                        .border(1.dp, BorderSoftHairline, RoundedCornerShape(14.dp))
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable {
                             showSettingsDialog = false
                             try {
                                 context.startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS))
                             } catch (_: Throwable) {
                                 context.startActivity(Intent(Settings.ACTION_SETTINGS))
                             }
-                        },
-                        colors = ButtonDefaults.filledTonalButtonColors(
-                            containerColor = CardCharcoal,
-                            contentColor = AccentPeriwinkle
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
+                        }
+                        .padding(horizontal = 14.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Settings, contentDescription = null, tint = TextPrimary, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(if (isZh) "前往系统默认应用设置" else "System Default Apps Settings")
+                        Text(
+                            text = if (isZh) "系统默认应用设置" else "System Default Apps",
+                            color = TextPrimary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1
+                        )
                     }
                 }
-            },
-            confirmButton = {
-                TextButton(onClick = { showSettingsDialog = false }) {
-                    Text(if (isZh) "关闭" else "Close", color = AccentPeriwinkle)
+
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.CenterEnd
+                ) {
+                    TextButton(onClick = { showSettingsDialog = false }) {
+                        Text(if (isZh) "关闭" else "Close", color = TextSecondary, fontSize = 14.sp)
+                    }
                 }
             }
-        )
+        }
     }
 }
 
 // =============================================================================
-// GRID CARD & LIST ROW (With tasteful Jewel-Tone Badges instead of ugly flat grey!)
+// GRID CARD & LIST ROW (Soft Monochrome with Dynamic Waveform for Audio Files!)
 // =============================================================================
 @Composable
 fun RecentFileGridCard(
@@ -1086,24 +1238,15 @@ fun RecentFileGridCard(
     onCardClick: () -> Unit,
     onMoreClick: () -> Unit
 ) {
-    val badgeColor = when {
-        file.isVideo -> Color(0xFFF43F5E)
-        file.isAudio -> Color(0xFF38BDF8)
-        file.isImage -> Color(0xFF10B981)
-        else -> Color(0xFF818CF8)
-    }
-    val badgeIcon = when {
-        file.isVideo -> Icons.Default.PlayArrow
-        file.isAudio -> Icons.Default.GraphicEq
-        file.isImage -> Icons.Default.Image
-        else -> Icons.Default.Description
-    }
+    val isThisAudioPlaying = file.isAudio &&
+        AudioPlayerController.currentFile?.uriString == file.uriString &&
+        AudioPlayerController.isPlaying
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(CardCharcoal, RoundedCornerShape(16.dp))
-            .border(1.dp, BorderHairline, RoundedCornerShape(16.dp))
+            .background(CardSoftCharcoal, RoundedCornerShape(16.dp))
+            .border(1.dp, BorderSoftHairline, RoundedCornerShape(16.dp))
             .clickable { onCardClick() }
             .padding(12.dp)
     ) {
@@ -1111,15 +1254,30 @@ fun RecentFileGridCard(
             Box(
                 modifier = Modifier
                     .size(26.dp)
-                    .background(badgeColor, RoundedCornerShape(7.dp)),
+                    .background(CardElevatedSlate, RoundedCornerShape(7.dp)),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    imageVector = badgeIcon,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(16.dp)
-                )
+                if (file.isAudio) {
+                    AnimatedAudioWaveform(
+                        isPlaying = isThisAudioPlaying,
+                        modifier = Modifier.size(15.dp),
+                        barColor = TextPrimary,
+                        barCount = 4,
+                        strokeWidth = 1.8.dp
+                    )
+                } else {
+                    val badgeIcon = when {
+                        file.isVideo -> Icons.Default.PlayArrow
+                        file.isImage -> Icons.Default.Image
+                        else -> Icons.Default.Description
+                    }
+                    Icon(
+                        imageVector = badgeIcon,
+                        contentDescription = null,
+                        tint = TextPrimary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
             }
             Spacer(modifier = Modifier.width(8.dp))
             Text(
@@ -1149,7 +1307,7 @@ fun RecentFileGridCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(SurfaceGraphite, RoundedCornerShape(10.dp))
+                .background(SurfaceSoftGraphite, RoundedCornerShape(10.dp))
                 .padding(10.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
@@ -1160,12 +1318,12 @@ fun RecentFileGridCard(
             ) {
                 Box(
                     modifier = Modifier
-                        .background(badgeColor.copy(alpha = 0.2f), RoundedCornerShape(4.dp))
+                        .background(CardElevatedSlate, RoundedCornerShape(4.dp))
                         .padding(horizontal = 6.dp, vertical = 2.dp)
                 ) {
                     Text(
                         text = file.extension,
-                        color = badgeColor,
+                        color = TextPrimary,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -1188,7 +1346,7 @@ fun RecentFileGridCard(
 
             Text(
                 text = formatTimestamp(file.openedTimestamp, isZh),
-                color = AccentPeriwinkle,
+                color = TextSecondary,
                 fontSize = 10.sp,
                 maxLines = 1
             )
@@ -1203,18 +1361,15 @@ fun RecentFileListRow(
     onRowClick: () -> Unit,
     onMoreClick: () -> Unit
 ) {
-    val badgeColor = when {
-        file.isVideo -> Color(0xFFF43F5E)
-        file.isAudio -> Color(0xFF38BDF8)
-        file.isImage -> Color(0xFF10B981)
-        else -> Color(0xFF818CF8)
-    }
+    val isThisAudioPlaying = file.isAudio &&
+        AudioPlayerController.currentFile?.uriString == file.uriString &&
+        AudioPlayerController.isPlaying
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(CardCharcoal, RoundedCornerShape(14.dp))
-            .border(1.dp, BorderHairline, RoundedCornerShape(14.dp))
+            .background(CardSoftCharcoal, RoundedCornerShape(14.dp))
+            .border(1.dp, BorderSoftHairline, RoundedCornerShape(14.dp))
             .clickable { onRowClick() }
             .padding(12.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -1222,15 +1377,25 @@ fun RecentFileListRow(
         Box(
             modifier = Modifier
                 .size(42.dp)
-                .background(badgeColor.copy(alpha = 0.2f), RoundedCornerShape(10.dp)),
+                .background(CardElevatedSlate, RoundedCornerShape(10.dp)),
             contentAlignment = Alignment.Center
         ) {
-            Text(
-                text = file.extension,
-                color = badgeColor,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold
-            )
+            if (file.isAudio && isThisAudioPlaying) {
+                AnimatedAudioWaveform(
+                    isPlaying = true,
+                    modifier = Modifier.size(22.dp),
+                    barColor = TextPrimary,
+                    barCount = 4,
+                    strokeWidth = 2.dp
+                )
+            } else {
+                Text(
+                    text = file.extension,
+                    color = TextPrimary,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
         }
         Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
@@ -1257,7 +1422,7 @@ fun RecentFileListRow(
 }
 
 // =============================================================================
-// 1A. BUILT-IN VIDEO PLAYER SCREEN (Top-Right 3-dots button)
+// 1A. BUILT-IN VIDEO PLAYER SCREEN
 // =============================================================================
 @Composable
 fun BuiltInVideoPlayerScreen(
@@ -1301,12 +1466,12 @@ fun BuiltInVideoPlayerScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(BgCarbon)
+            .background(BgSoftCarbon)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(SurfaceGraphite)
+                .background(SurfaceSoftGraphite)
                 .padding(horizontal = 10.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -1324,7 +1489,7 @@ fun BuiltInVideoPlayerScreen(
                 )
                 Text(
                     text = "${file.extension} • ${file.sizeLabel} • ${file.mimeType}",
-                    color = AccentPeriwinkle,
+                    color = TextSecondary,
                     fontSize = 11.sp,
                     maxLines = 1
                 )
@@ -1332,8 +1497,8 @@ fun BuiltInVideoPlayerScreen(
 
             Box(
                 modifier = Modifier
-                    .background(CardCharcoal, RoundedCornerShape(10.dp))
-                    .border(1.dp, BorderHairline, RoundedCornerShape(10.dp))
+                    .background(CardSoftCharcoal, RoundedCornerShape(10.dp))
+                    .border(1.dp, BorderSoftHairline, RoundedCornerShape(10.dp))
                     .clip(RoundedCornerShape(10.dp))
                     .clickable {
                         val speeds = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f, 3.0f)
@@ -1345,7 +1510,7 @@ fun BuiltInVideoPlayerScreen(
             ) {
                 Text(
                     text = "${playbackSpeed}x",
-                    color = AccentPeriwinkle,
+                    color = TextPrimary,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 13.sp
                 )
@@ -1387,8 +1552,8 @@ fun BuiltInVideoPlayerScreen(
                     modifier = Modifier
                         .padding(24.dp)
                         .fillMaxWidth()
-                        .background(SurfaceGraphite, RoundedCornerShape(16.dp))
-                        .border(1.dp, BorderHairline, RoundedCornerShape(16.dp))
+                        .background(SurfaceSoftGraphite, RoundedCornerShape(16.dp))
+                        .border(1.dp, BorderSoftHairline, RoundedCornerShape(16.dp))
                         .padding(20.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -1396,7 +1561,7 @@ fun BuiltInVideoPlayerScreen(
                     Icon(
                         Icons.Default.ErrorOutline,
                         contentDescription = null,
-                        tint = Color(0xFFF87171),
+                        tint = TextPrimary,
                         modifier = Modifier.size(34.dp)
                     )
                     Text(
@@ -1416,10 +1581,11 @@ fun BuiltInVideoPlayerScreen(
 }
 
 // =============================================================================
-// 1B. BUILT-IN BACKGROUND-ENABLED AUDIO PLAYER SCREEN
-// - Bound to AudioPlaybackService & AudioPlayerController so audio NEVER stops when exiting!
-// - Refined Indigo-Periwinkle waveform centerpiece & Play/Pause button (no ugly flat grey!)
-// - 3-dots button placed on the right end of the bottom transport row (matching 1000043485.jpg!)
+// 1B. BUILT-IN AUDIO PLAYER SCREEN
+// - Center Circle has a REAL-TIME ANIMATED 7-BAR WAVEFORM (`AnimatedAudioWaveform`)!
+// - Bottom-Left has the Single-Track Loop (`RepeatOne`) button (matching 1000043500.jpg)!
+// - Bottom-Right has the 3-dots (`MoreHoriz`) button!
+// - Soft, comfortable Monochrome Charcoal & Slate styling!
 // =============================================================================
 @Composable
 fun BuiltInAudioPlayerScreen(
@@ -1431,6 +1597,7 @@ fun BuiltInAudioPlayerScreen(
     val context = LocalContext.current
 
     val isPlaying = AudioPlayerController.isPlaying
+    val isRepeatOne = AudioPlayerController.isRepeatOne
     val currentPosMs = AudioPlayerController.currentPositionMs
     val durationMs = AudioPlayerController.durationMs
     val playbackSpeed = AudioPlayerController.playbackSpeed
@@ -1438,13 +1605,13 @@ fun BuiltInAudioPlayerScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(BgCarbon)
+            .background(BgSoftCarbon)
     ) {
         // Top Bar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(SurfaceGraphite)
+                .background(SurfaceSoftGraphite)
                 .padding(horizontal = 10.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -1462,7 +1629,7 @@ fun BuiltInAudioPlayerScreen(
                 )
                 Text(
                     text = "${file.extension} • ${file.sizeLabel} • ${file.mimeType}",
-                    color = AccentPeriwinkle,
+                    color = TextSecondary,
                     fontSize = 11.sp,
                     maxLines = 1
                 )
@@ -1470,31 +1637,20 @@ fun BuiltInAudioPlayerScreen(
 
             Box(
                 modifier = Modifier
-                    .background(CardCharcoal, RoundedCornerShape(10.dp))
-                    .border(1.dp, BorderHairline, RoundedCornerShape(10.dp))
+                    .background(CardSoftCharcoal, RoundedCornerShape(10.dp))
+                    .border(1.dp, BorderSoftHairline, RoundedCornerShape(10.dp))
                     .clip(RoundedCornerShape(10.dp))
                     .clickable { AudioPlayerController.cycleSpeed() }
                     .padding(horizontal = 11.dp, vertical = 6.dp)
             ) {
                 Text(
                     text = "${playbackSpeed}x",
-                    color = AccentPeriwinkle,
+                    color = TextPrimary,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 13.sp
                 )
             }
         }
-
-        val infiniteTransition = rememberInfiniteTransition(label = "AudioPulse")
-        val pulseScale by infiniteTransition.animateFloat(
-            initialValue = 0.94f,
-            targetValue = if (isPlaying) 1.07f else 0.96f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(850, easing = FastOutSlowInEasing),
-                repeatMode = RepeatMode.Reverse
-            ),
-            label = "PulseScale"
-        )
 
         Column(
             modifier = Modifier
@@ -1506,27 +1662,24 @@ fun BuiltInAudioPlayerScreen(
         ) {
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Center Waveform & Track Info
+            // Center Dynamic Animated Waveform Circle & Track Info
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                verticalArrangement = Arrangement.spacedBy(18.dp)
             ) {
                 Box(
                     modifier = Modifier
-                        .size(128.dp)
-                        .graphicsLayer {
-                            scaleX = if (isPlaying) pulseScale else 1f
-                            scaleY = if (isPlaying) pulseScale else 1f
-                        }
-                        .background(AccentContainerIndigo, CircleShape)
-                        .border(2.dp, AccentIndigo.copy(alpha = 0.65f), CircleShape),
+                        .size(132.dp)
+                        .background(CardSoftCharcoal, CircleShape)
+                        .border(1.5.dp, ActivePillBorder, CircleShape),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        Icons.Default.GraphicEq,
-                        contentDescription = null,
-                        tint = AccentPeriwinkle,
-                        modifier = Modifier.size(56.dp)
+                    AnimatedAudioWaveform(
+                        isPlaying = isPlaying,
+                        modifier = Modifier.size(64.dp),
+                        barColor = AccentSoftSilver,
+                        barCount = 7,
+                        strokeWidth = 4.dp
                     )
                 }
 
@@ -1562,9 +1715,9 @@ fun BuiltInAudioPlayerScreen(
                         AudioPlayerController.seekTo(target)
                     },
                     colors = SliderDefaults.colors(
-                        thumbColor = AccentPeriwinkle,
-                        activeTrackColor = AccentIndigo,
-                        inactiveTrackColor = CardElevated
+                        thumbColor = AccentSoftSilver,
+                        activeTrackColor = AccentSoftSilver,
+                        inactiveTrackColor = CardElevatedSlate
                     ),
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -1575,7 +1728,7 @@ fun BuiltInAudioPlayerScreen(
                 ) {
                     Text(
                         text = formatDurationMs(currentPosMs),
-                        color = AccentPeriwinkle,
+                        color = TextPrimary,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium
                     )
@@ -1589,23 +1742,46 @@ fun BuiltInAudioPlayerScreen(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 // Symmetric Control Row:
-                // Left balance spacer | Rewind | Play/Pause | Forward | Right 3-dots button (matching 1000043485.jpg!)
+                // Bottom-Left: Single-Track Loop (RepeatOne) | Center: Rewind, Play/Pause, Forward | Bottom-Right: 3-dots
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Spacer(modifier = Modifier.size(48.dp))
+                    // Bottom-Left Single-Track Loop Toggle Button
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .background(
+                                if (isRepeatOne) ActivePillSlate else CardSoftCharcoal,
+                                RoundedCornerShape(15.dp)
+                            )
+                            .border(
+                                1.dp,
+                                if (isRepeatOne) ActivePillBorder else BorderSoftHairline,
+                                RoundedCornerShape(15.dp)
+                            )
+                            .clip(RoundedCornerShape(15.dp))
+                            .clickable { AudioPlayerController.toggleRepeatOne() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (isRepeatOne) Icons.Default.RepeatOne else Icons.Default.Repeat,
+                            contentDescription = "Single Track Loop",
+                            tint = if (isRepeatOne) TextPrimary else TextSecondary,
+                            modifier = Modifier.size(21.dp)
+                        )
+                    }
 
                     Row(
-                        horizontalArrangement = Arrangement.spacedBy(22.dp),
+                        horizontalArrangement = Arrangement.spacedBy(20.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Box(
                             modifier = Modifier
                                 .size(50.dp)
-                                .background(CardCharcoal, RoundedCornerShape(16.dp))
-                                .border(1.dp, BorderHairline, RoundedCornerShape(16.dp))
+                                .background(CardSoftCharcoal, RoundedCornerShape(16.dp))
+                                .border(1.dp, BorderSoftHairline, RoundedCornerShape(16.dp))
                                 .clip(RoundedCornerShape(16.dp))
                                 .clickable { AudioPlayerController.seekBy(-10_000L) },
                             contentAlignment = Alignment.Center
@@ -1630,7 +1806,8 @@ fun BuiltInAudioPlayerScreen(
                                     scaleX = btnScale
                                     scaleY = btnScale
                                 }
-                                .background(AccentIndigo, RoundedCornerShape(22.dp))
+                                .background(ActivePillSlate, RoundedCornerShape(22.dp))
+                                .border(1.dp, ActivePillBorder, RoundedCornerShape(22.dp))
                                 .clip(RoundedCornerShape(22.dp))
                                 .clickable { AudioPlayerController.togglePlayPause(context) },
                             contentAlignment = Alignment.Center
@@ -1639,7 +1816,7 @@ fun BuiltInAudioPlayerScreen(
                                 Icon(
                                     imageVector = if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
                                     contentDescription = "Play or Pause",
-                                    tint = Color.White,
+                                    tint = TextPrimary,
                                     modifier = Modifier.size(32.dp)
                                 )
                             }
@@ -1648,8 +1825,8 @@ fun BuiltInAudioPlayerScreen(
                         Box(
                             modifier = Modifier
                                 .size(50.dp)
-                                .background(CardCharcoal, RoundedCornerShape(16.dp))
-                                .border(1.dp, BorderHairline, RoundedCornerShape(16.dp))
+                                .background(CardSoftCharcoal, RoundedCornerShape(16.dp))
+                                .border(1.dp, BorderSoftHairline, RoundedCornerShape(16.dp))
                                 .clip(RoundedCornerShape(16.dp))
                                 .clickable { AudioPlayerController.seekBy(10_000L) },
                             contentAlignment = Alignment.Center
@@ -1663,12 +1840,12 @@ fun BuiltInAudioPlayerScreen(
                         }
                     }
 
-                    // 3-Dots Button on the right side of the transport row (matching 1000043485.jpg!)
+                    // Bottom-Right 3-Dots Button
                     Box(
                         modifier = Modifier
                             .size(48.dp)
-                            .background(CardCharcoal, RoundedCornerShape(15.dp))
-                            .border(1.dp, BorderHairline, RoundedCornerShape(15.dp))
+                            .background(CardSoftCharcoal, RoundedCornerShape(15.dp))
+                            .border(1.dp, BorderSoftHairline, RoundedCornerShape(15.dp))
                             .clip(RoundedCornerShape(15.dp))
                             .clickable { onOpenRouterSheet() },
                         contentAlignment = Alignment.Center
@@ -1687,7 +1864,7 @@ fun BuiltInAudioPlayerScreen(
 }
 
 // =============================================================================
-// 2. BUILT-IN IMAGE VIEWER SCREEN (Top-Right 3-dots button)
+// 2. BUILT-IN IMAGE VIEWER SCREEN
 // =============================================================================
 @Composable
 fun BuiltInImageViewerScreen(
@@ -1741,12 +1918,12 @@ fun BuiltInImageViewerScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(BgCarbon)
+            .background(BgSoftCarbon)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(SurfaceGraphite)
+                .background(SurfaceSoftGraphite)
                 .padding(horizontal = 10.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -1764,7 +1941,7 @@ fun BuiltInImageViewerScreen(
                 )
                 Text(
                     text = "${file.extension} • ${file.sizeLabel} • ${file.mimeType}",
-                    color = AccentPeriwinkle,
+                    color = TextSecondary,
                     fontSize = 11.sp,
                     maxLines = 1
                 )
@@ -1835,7 +2012,7 @@ fun BuiltInImageViewerScreen(
                     )
                 }
                 else -> {
-                    CircularProgressIndicator(color = AccentIndigo)
+                    CircularProgressIndicator(color = AccentSoftSilver)
                 }
             }
         }
@@ -1843,7 +2020,7 @@ fun BuiltInImageViewerScreen(
 }
 
 // =============================================================================
-// 3. EXPANDED UNSUPPORTED FILE SCREEN (Top-Right 3-dots button)
+// 3. EXPANDED UNSUPPORTED FILE SCREEN
 // =============================================================================
 @Composable
 fun ExpandedUnsupportedFileScreen(
@@ -1867,12 +2044,12 @@ fun ExpandedUnsupportedFileScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(BgCarbon)
+            .background(BgSoftCarbon)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(SurfaceGraphite)
+                .background(SurfaceSoftGraphite)
                 .padding(horizontal = 10.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -1890,7 +2067,7 @@ fun ExpandedUnsupportedFileScreen(
                 )
                 Text(
                     text = "${file.extension} • ${file.sizeLabel} • ${file.mimeType}",
-                    color = AccentPeriwinkle,
+                    color = TextSecondary,
                     fontSize = 11.sp,
                     maxLines = 1
                 )
@@ -1911,8 +2088,8 @@ fun ExpandedUnsupportedFileScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(SurfaceGraphite, RoundedCornerShape(16.dp))
-                    .border(1.dp, BorderHairline, RoundedCornerShape(16.dp))
+                    .background(SurfaceSoftGraphite, RoundedCornerShape(16.dp))
+                    .border(1.dp, BorderSoftHairline, RoundedCornerShape(16.dp))
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
@@ -1920,12 +2097,12 @@ fun ExpandedUnsupportedFileScreen(
                     Box(
                         modifier = Modifier
                             .size(42.dp)
-                            .background(AccentContainerIndigo, RoundedCornerShape(10.dp)),
+                            .background(CardElevatedSlate, RoundedCornerShape(10.dp)),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
                             text = file.extension,
-                            color = AccentPeriwinkle,
+                            color = TextPrimary,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold
                         )
@@ -1949,7 +2126,7 @@ fun ExpandedUnsupportedFileScreen(
                     }
                 }
 
-                HorizontalDivider(color = BorderHairline)
+                HorizontalDivider(color = BorderSoftHairline)
 
                 Text(
                     text = file.name,
@@ -1961,7 +2138,7 @@ fun ExpandedUnsupportedFileScreen(
                 )
                 Text(
                     text = "${file.sizeLabel} • ${file.mimeType}",
-                    color = AccentPeriwinkle,
+                    color = TextSecondary,
                     fontSize = 11.sp
                 )
             }
@@ -1988,10 +2165,10 @@ fun ExpandedUnsupportedFileScreen(
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .background(CardCharcoal, RoundedCornerShape(14.dp))
+                                .background(CardSoftCharcoal, RoundedCornerShape(14.dp))
                                 .border(
                                     1.dp,
-                                    if (app.isPinned) AccentIndigo.copy(alpha = 0.55f) else BorderHairline,
+                                    if (app.isPinned) ActivePillBorder else BorderSoftHairline,
                                     RoundedCornerShape(14.dp)
                                 )
                                 .clickable {
@@ -2016,7 +2193,7 @@ fun ExpandedUnsupportedFileScreen(
                                 Icon(
                                     Icons.Default.Apps,
                                     contentDescription = null,
-                                    tint = AccentPeriwinkle,
+                                    tint = TextPrimary,
                                     modifier = Modifier.size(38.dp)
                                 )
                             }
@@ -2038,6 +2215,10 @@ fun ExpandedUnsupportedFileScreen(
 
 // =============================================================================
 // 4. IN-WINDOW 120FPS APP ROUTER SHEET
+// Fixed 1000043492.jpg:
+// - Active Tab uses comfortable ActivePillSlate (#323640) + crisp white text (NO glaring light-grey block!)
+// - Switch uses soft slate track instead of glaring white track!
+// - App rows use 64.dp height with generous padding so package names are NEVER clipped at the bottom!
 // =============================================================================
 @Composable
 fun TelegramStyleAppRouterSheet(
@@ -2079,8 +2260,8 @@ fun TelegramStyleAppRouterSheet(
         modifier = Modifier
             .fillMaxWidth()
             .fillMaxHeight(0.82f)
-            .background(SurfaceGraphite, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
-            .border(1.dp, BorderHairline, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+            .background(SurfaceSoftGraphite, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+            .border(1.dp, BorderSoftHairline, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null
@@ -2097,7 +2278,7 @@ fun TelegramStyleAppRouterSheet(
                 modifier = Modifier
                     .width(36.dp)
                     .height(4.dp)
-                    .background(BorderHairline, RoundedCornerShape(2.dp))
+                    .background(BorderSoftHairline, RoundedCornerShape(2.dp))
             )
         }
 
@@ -2107,36 +2288,41 @@ fun TelegramStyleAppRouterSheet(
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             val openTabBg by animateColorAsState(
-                targetValue = if (!forShare) AccentIndigo else Color.Transparent,
+                targetValue = if (!forShare) ActivePillSlate else Color.Transparent,
                 animationSpec = tween(150),
                 label = "OpenTabBg"
             )
             val shareTabBg by animateColorAsState(
-                targetValue = if (forShare) AccentIndigo else Color.Transparent,
+                targetValue = if (forShare) ActivePillSlate else Color.Transparent,
                 animationSpec = tween(150),
                 label = "ShareTabBg"
             )
             Row(
                 modifier = Modifier
                     .weight(1f)
-                    .height(40.dp)
-                    .background(CardCharcoal, RoundedCornerShape(12.dp))
-                    .border(1.dp, BorderHairline, RoundedCornerShape(12.dp))
-                    .padding(2.dp)
+                    .height(42.dp)
+                    .background(BgSoftCarbon, RoundedCornerShape(13.dp))
+                    .border(1.dp, BorderSoftHairline, RoundedCornerShape(13.dp))
+                    .padding(3.dp)
             ) {
                 Box(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxHeight()
                         .background(openTabBg, RoundedCornerShape(10.dp))
+                        .border(
+                            width = if (!forShare) 1.dp else 0.dp,
+                            color = if (!forShare) ActivePillBorder else Color.Transparent,
+                            shape = RoundedCornerShape(10.dp)
+                        )
                         .clickable { forShare = false },
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = if (isZh) "用其他应用打开" else "Open With",
-                        color = if (!forShare) Color.White else TextSecondary,
+                        color = if (!forShare) TextPrimary else TextSecondary,
                         fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
+                        fontWeight = if (!forShare) FontWeight.SemiBold else FontWeight.Normal,
                         maxLines = 1
                     )
                 }
@@ -2145,14 +2331,19 @@ fun TelegramStyleAppRouterSheet(
                         .weight(1f)
                         .fillMaxHeight()
                         .background(shareTabBg, RoundedCornerShape(10.dp))
+                        .border(
+                            width = if (forShare) 1.dp else 0.dp,
+                            color = if (forShare) ActivePillBorder else Color.Transparent,
+                            shape = RoundedCornerShape(10.dp)
+                        )
                         .clickable { forShare = true },
-                        contentAlignment = Alignment.Center
+                    contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = if (isZh) "分享给..." else "Share To...",
-                        color = if (forShare) Color.White else TextSecondary,
+                        color = if (forShare) TextPrimary else TextSecondary,
                         fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
+                        fontWeight = if (forShare) FontWeight.SemiBold else FontWeight.Normal,
                         maxLines = 1
                     )
                 }
@@ -2162,7 +2353,7 @@ fun TelegramStyleAppRouterSheet(
                 Icon(
                     Icons.Default.DeleteOutline,
                     contentDescription = "Remove Record",
-                    tint = Color(0xFFF87171)
+                    tint = TextSecondary
                 )
             }
 
@@ -2187,7 +2378,8 @@ fun TelegramStyleAppRouterSheet(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(BgCarbon, RoundedCornerShape(12.dp))
+                .background(CardSoftCharcoal, RoundedCornerShape(12.dp))
+                .border(1.dp, BorderSoftHairline, RoundedCornerShape(12.dp))
                 .clickable { includeAllApps = !includeAllApps }
                 .padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -2203,10 +2395,12 @@ fun TelegramStyleAppRouterSheet(
                 checked = includeAllApps,
                 onCheckedChange = { includeAllApps = it },
                 colors = SwitchDefaults.colors(
-                    checkedThumbColor = Color.White,
-                    checkedTrackColor = AccentIndigo,
+                    checkedThumbColor = TextPrimary,
+                    checkedTrackColor = ActivePillSlate,
+                    checkedBorderColor = ActivePillBorder,
                     uncheckedThumbColor = TextSecondary,
-                    uncheckedTrackColor = CardCharcoal
+                    uncheckedTrackColor = BgSoftCarbon,
+                    uncheckedBorderColor = BorderSoftHairline
                 )
             )
         }
@@ -2217,8 +2411,8 @@ fun TelegramStyleAppRouterSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(42.dp)
-                .background(CardCharcoal, RoundedCornerShape(12.dp))
-                .border(1.dp, BorderHairline, RoundedCornerShape(12.dp))
+                .background(CardSoftCharcoal, RoundedCornerShape(12.dp))
+                .border(1.dp, BorderSoftHairline, RoundedCornerShape(12.dp))
                 .padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -2238,7 +2432,7 @@ fun TelegramStyleAppRouterSheet(
                     onValueChange = { appSearch = it },
                     singleLine = true,
                     textStyle = TextStyle(color = TextPrimary, fontSize = 13.sp),
-                    cursorBrush = SolidColor(AccentPeriwinkle),
+                    cursorBrush = SolidColor(TextPrimary),
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -2261,11 +2455,11 @@ fun TelegramStyleAppRouterSheet(
                 key = { it.packageName },
                 contentType = { "app_row" }
             ) { app ->
-                val rowBg = if (app.isPinned) AccentContainerIndigo else CardCharcoal
+                val rowBg = if (app.isPinned) CardElevatedSlate else CardSoftCharcoal
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(58.dp)
+                        .height(64.dp)
                         .background(rowBg, RoundedCornerShape(12.dp))
                         .clickable {
                             onDismiss()
@@ -2277,27 +2471,30 @@ fun TelegramStyleAppRouterSheet(
                                 forShare = forShare
                             )
                         }
-                        .padding(horizontal = 12.dp),
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     if (app.iconBitmap != null) {
                         Image(
                             bitmap = app.iconBitmap,
                             contentDescription = app.label,
-                            modifier = Modifier.size(36.dp)
+                            modifier = Modifier.size(38.dp)
                         )
                     } else {
                         Icon(
                             Icons.Default.Android,
                             contentDescription = null,
-                            tint = AccentPeriwinkle,
-                            modifier = Modifier.size(36.dp)
+                            tint = TextPrimary,
+                            modifier = Modifier.size(38.dp)
                         )
                     }
 
                     Spacer(modifier = Modifier.width(12.dp))
 
-                    Column(modifier = Modifier.weight(1f)) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.Center
+                    ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
                                 text = app.label,
@@ -2311,7 +2508,7 @@ fun TelegramStyleAppRouterSheet(
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
                                     text = if (isZh) "置顶" else "PINNED",
-                                    color = AccentPeriwinkle,
+                                    color = TextPrimary,
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold
                                 )
@@ -2325,6 +2522,7 @@ fun TelegramStyleAppRouterSheet(
                                 )
                             }
                         }
+                        Spacer(modifier = Modifier.height(2.dp))
                         Text(
                             text = app.packageName,
                             color = TextSecondary,
@@ -2343,7 +2541,7 @@ fun TelegramStyleAppRouterSheet(
                         Icon(
                             imageVector = if (app.isPinned) Icons.Default.PushPin else Icons.Default.StarBorder,
                             contentDescription = "Pin",
-                            tint = if (app.isPinned) AccentPeriwinkle else TextSecondary
+                            tint = if (app.isPinned) TextPrimary else TextSecondary
                         )
                     }
                 }

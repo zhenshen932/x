@@ -46,6 +46,7 @@ import kotlinx.coroutines.withContext
 object AudioPlayerController {
     var currentFile by mutableStateOf<RecentFileEntry?>(null)
     var isPlaying by mutableStateOf(false)
+    var isRepeatOne by mutableStateOf(false)
     var currentPositionMs by mutableLongStateOf(0L)
     var durationMs by mutableLongStateOf(0L)
     var playbackSpeed by mutableFloatStateOf(1.0f)
@@ -94,6 +95,24 @@ object AudioPlayerController {
         }
     }
 
+    fun toggleRepeatOne() {
+        val next = !isRepeatOne
+        isRepeatOne = next
+        serviceInstance?.setRepeatOneInternal(next)
+    }
+
+    fun stopAndDismiss(context: Context) {
+        currentFile = null
+        isPlaying = false
+        currentPositionMs = 0L
+        durationMs = 0L
+        serviceInstance?.stopPlaybackAndNotification()
+        try {
+            context.stopService(Intent(context, AudioPlaybackService::class.java))
+        } catch (_: Throwable) {
+        }
+    }
+
     fun seekTo(posMs: Long) {
         serviceInstance?.seekToInternal(posMs)
     }
@@ -122,12 +141,13 @@ object AudioPlayerController {
 class AudioPlaybackService : Service() {
 
     companion object {
-        const val CHANNEL_ID = "omnimedia_audio_playback_channel"
-        const val NOTIFICATION_ID = 2026
+        const val CHANNEL_ID = "omnimedia_audio_playback_channel_v2"
+        const val NOTIFICATION_ID = 2027
         const val ACTION_PLAY_NEW = "com.omnimedia.hub.action.PLAY_NEW"
         const val ACTION_TOGGLE_PLAY = "com.omnimedia.hub.action.TOGGLE_PLAY"
         const val ACTION_PREV = "com.omnimedia.hub.action.PREV"
         const val ACTION_NEXT = "com.omnimedia.hub.action.NEXT"
+        const val ACTION_STOP = "com.omnimedia.hub.action.STOP"
 
         const val EXTRA_URI = "extra_uri"
         const val EXTRA_NAME = "extra_name"
@@ -160,6 +180,7 @@ class AudioPlaybackService : Service() {
             .setWakeMode(C.WAKE_MODE_LOCAL)
             .build()
             .apply {
+                repeatMode = if (AudioPlayerController.isRepeatOne) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
                 addListener(object : Player.Listener {
                     override fun onIsPlayingChanged(isPlaying: Boolean) {
                         AudioPlayerController.isPlaying = isPlaying
@@ -170,8 +191,13 @@ class AudioPlaybackService : Service() {
                         if (playbackState == Player.STATE_READY) {
                             AudioPlayerController.durationMs = duration.coerceAtLeast(0L)
                         } else if (playbackState == Player.STATE_ENDED) {
-                            AudioPlayerController.isPlaying = false
-                            updateNotification()
+                            if (AudioPlayerController.isRepeatOne) {
+                                seekTo(0L)
+                                play()
+                            } else {
+                                AudioPlayerController.isPlaying = false
+                                updateNotification()
+                            }
                         }
                     }
 
@@ -187,7 +213,7 @@ class AudioPlaybackService : Service() {
         serviceScope.launch {
             while (true) {
                 val p = exoPlayer
-                if (p != null) {
+                if (p != null && AudioPlayerController.currentFile != null) {
                     AudioPlayerController.currentPositionMs = p.currentPosition.coerceAtLeast(0L)
                     val d = p.duration
                     if (d > 0) AudioPlayerController.durationMs = d
@@ -226,6 +252,9 @@ class AudioPlaybackService : Service() {
             ACTION_NEXT -> {
                 skipToAdjacentAudio(1)
             }
+            ACTION_STOP -> {
+                AudioPlayerController.stopAndDismiss(applicationContext)
+            }
         }
         return START_STICKY
     }
@@ -242,11 +271,11 @@ class AudioPlaybackService : Service() {
         AudioPlayerController.trackArtist = parsedArtist
         AudioPlayerController.coverBitmap = buildFallbackCoverBitmap()
 
-        // Start foreground immediately with initial metadata
         startForegroundSafely(buildCustomNotification())
 
         try {
             exoPlayer?.apply {
+                repeatMode = if (AudioPlayerController.isRepeatOne) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
                 setMediaItem(MediaItem.fromUri(Uri.parse(entry.uriString)))
                 playbackParameters = PlaybackParameters(AudioPlayerController.playbackSpeed)
                 prepare()
@@ -256,7 +285,6 @@ class AudioPlaybackService : Service() {
             AudioPlayerController.errorMessage = e.localizedMessage
         }
 
-        // Extract real ID3/FLAC embedded title, artist, and album cover asynchronously
         serviceScope.launch {
             val extracted = withContext(Dispatchers.IO) {
                 extractAudioMetadata(entry.uriString)
@@ -292,6 +320,26 @@ class AudioPlaybackService : Service() {
             p.play()
         }
         updateNotification()
+    }
+
+    internal fun setRepeatOneInternal(repeatOne: Boolean) {
+        exoPlayer?.repeatMode = if (repeatOne) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+    }
+
+    internal fun stopPlaybackAndNotification() {
+        try {
+            exoPlayer?.stop()
+        } catch (_: Throwable) {
+        }
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } catch (_: Throwable) {
+        }
+        try {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.cancel(NOTIFICATION_ID)
+        } catch (_: Throwable) {
+        }
     }
 
     internal fun seekToInternal(posMs: Long) {
@@ -335,7 +383,7 @@ class AudioPlaybackService : Service() {
             val picBytes = retriever.embeddedPicture
             val coverBmp = if (picBytes != null && picBytes.isNotEmpty()) {
                 val raw = BitmapFactory.decodeByteArray(picBytes, 0, picBytes.size)
-                if (raw != null) makeRoundedCoverBitmap(raw, 168, 28f) else null
+                if (raw != null) makeRoundedCoverBitmap(raw, 156, 26f) else null
             } else {
                 null
             }
@@ -364,30 +412,29 @@ class AudioPlaybackService : Service() {
     }
 
     private fun buildFallbackCoverBitmap(): Bitmap {
-        val sizePx = 168
+        val sizePx = 156
         val output = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(output)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             shader = LinearGradient(
                 0f, 0f, sizePx.toFloat(), sizePx.toFloat(),
-                intArrayOf(0xFF2B2D42.toInt(), 0xFF1A1B26.toInt()),
+                intArrayOf(0xFF26282E.toInt(), 0xFF18191D.toInt()),
                 null,
                 Shader.TileMode.CLAMP
             )
         }
         val rectF = RectF(0f, 0f, sizePx.toFloat(), sizePx.toFloat())
-        canvas.drawRoundRect(rectF, 28f, 28f, paint)
+        canvas.drawRoundRect(rectF, 26f, 26f, paint)
 
-        // Draw crisp waveform bars in the center
         val barPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0xFF818CF8.toInt()
-            strokeWidth = 10f
+            color = 0xFFD4D7DE.toInt()
+            strokeWidth = 9f
             strokeCap = Paint.Cap.ROUND
         }
         val cx = sizePx / 2f
         val cy = sizePx / 2f
-        val heights = floatArrayOf(24f, 48f, 70f, 44f, 26f)
-        val offsets = floatArrayOf(-36f, -18f, 0f, 18f, 36f)
+        val heights = floatArrayOf(22f, 44f, 64f, 40f, 24f)
+        val offsets = floatArrayOf(-34f, -17f, 0f, 17f, 34f)
         for (i in heights.indices) {
             val x = cx + offsets[i]
             val half = heights[i] / 2f
@@ -399,7 +446,7 @@ class AudioPlaybackService : Service() {
     private fun buildCustomNotification(): Notification {
         val remoteViews = RemoteViews(packageName, R.layout.notification_media_player)
         val title = AudioPlayerController.trackTitle.ifBlank { AudioPlayerController.currentFile?.name ?: "OmniMedia Hub" }
-        val subtitle = AudioPlayerController.trackArtist.ifBlank { "OmniMedia Audio" }
+        val subtitle = AudioPlayerController.trackArtist.ifBlank { "Audio" }
         val cover = AudioPlayerController.coverBitmap ?: buildFallbackCoverBitmap()
 
         remoteViews.setTextViewText(R.id.notif_title, title)
@@ -450,7 +497,7 @@ class AudioPlaybackService : Service() {
             .setCustomBigContentView(remoteViews)
             .setOngoing(AudioPlayerController.isPlaying)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOnlyAlertOnce(true)
             .build()
     }
@@ -471,6 +518,7 @@ class AudioPlaybackService : Service() {
     }
 
     private fun updateNotification() {
+        if (AudioPlayerController.currentFile == null) return
         try {
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.notify(NOTIFICATION_ID, buildCustomNotification())
