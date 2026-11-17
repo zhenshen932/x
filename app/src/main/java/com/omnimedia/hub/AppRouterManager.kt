@@ -33,6 +33,7 @@ data class ExternalAppTarget(
     val packageName: String,
     val activityName: String,
     val label: String,
+    val labelLower: String,
     val isPinned: Boolean,
     val usageCount: Int,
     val isDirectMimeMatch: Boolean,
@@ -45,6 +46,7 @@ private data class CachedAppMeta(
     val packageName: String,
     val activityName: String,
     val label: String,
+    val labelLower: String,
     val iconBitmap: ImageBitmap?
 )
 
@@ -112,7 +114,7 @@ data class RecentFileEntry(
 }
 
 class AppRouterManager(private val context: Context) {
-    private val prefs = context.getSharedPreferences("omnimedia_router_v4", Context.MODE_PRIVATE)
+    private val prefs = context.getSharedPreferences("omnimedia_router_v5", Context.MODE_PRIVATE)
 
     companion object {
         private val bgScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -137,7 +139,6 @@ class AppRouterManager(private val context: Context) {
                 val appCtx = context.applicationContext ?: context
                 val pm = appCtx.packageManager
                 val probeUri = Uri.parse("content://${appCtx.packageName}.fileprovider/probe")
-                // Deduplicate strictly by packageName so each app appears only ONCE
                 val combinedByPkg = LinkedHashMap<String, ResolveInfo>()
 
                 val viewIntent = Intent(Intent.ACTION_VIEW).apply { setDataAndType(probeUri, "*/*") }
@@ -182,8 +183,9 @@ class AppRouterManager(private val context: Context) {
                         null
                     }?.also { iconCache[pkg] = it }
 
-                    built.add(CachedAppMeta(pkg, act, label, iconBmp))
+                    built.add(CachedAppMeta(pkg, act, label, label.lowercase(), iconBmp))
                 }
+                built.sortBy { it.labelLower }
                 cachedAllApps = built
             } catch (_: Throwable) {
             } finally {
@@ -192,7 +194,6 @@ class AppRouterManager(private val context: Context) {
         }
     }
 
-    // Persistent UI Preferences (Language, Grid/List View Mode, Sort Field, Sort Direction)
     fun getLanguage(): String = prefs.getString("app_lang", "zh") ?: "zh"
     fun setLanguage(lang: String) {
         prefs.edit().putString("app_lang", lang).apply()
@@ -301,6 +302,7 @@ class AppRouterManager(private val context: Context) {
             "pdf" -> "application/pdf"
             "zip" -> "application/zip"
             "py" -> "text/x-python"
+            "html", "htm" -> "text/html"
             "txt", "log", "ass", "srt", "json", "xml", "md" -> "text/plain"
             else -> null
         }
@@ -318,8 +320,7 @@ class AppRouterManager(private val context: Context) {
     }
 
     /**
-     * Instantaneous, zero-stutter app list retrieval.
-     * Deduplicated by packageName so each app appears strictly once.
+     * Pure memory lookup when includeAllApps is true (ZERO Binder IPC calls on UI thread!).
      */
     fun getAvailableAppsFast(
         fileName: String,
@@ -328,56 +329,68 @@ class AppRouterManager(private val context: Context) {
         includeAllApps: Boolean
     ): List<ExternalAppTarget> {
         return try {
-            val effectiveMime = detectMimeType(fileName, mimeType)
-            val cacheKey = "${if (forShare) "S" else "V"}_$effectiveMime"
+            val currentCache = cachedAllApps
+            if (currentCache.isEmpty()) return emptyList()
 
-            val exactPkgs = mimeMatchCache.getOrPut(cacheKey) {
-                val pm = context.packageManager
-                val probeUri = Uri.parse("content://${context.packageName}.fileprovider/probe")
-                val action = if (forShare) Intent.ACTION_SEND else Intent.ACTION_VIEW
-                val exactIntent = Intent(action).apply {
-                    if (forShare) {
-                        type = effectiveMime
-                        putExtra(Intent.EXTRA_STREAM, probeUri)
-                    } else {
-                        setDataAndType(probeUri, effectiveMime)
+            val exactPkgs: Set<String> = if (includeAllApps) {
+                emptySet()
+            } else {
+                val effectiveMime = detectMimeType(fileName, mimeType)
+                val cacheKey = "${if (forShare) "S" else "V"}_$effectiveMime"
+                mimeMatchCache.getOrPut(cacheKey) {
+                    val pm = context.packageManager
+                    val probeUri = Uri.parse("content://${context.packageName}.fileprovider/probe")
+                    val action = if (forShare) Intent.ACTION_SEND else Intent.ACTION_VIEW
+                    val exactIntent = Intent(action).apply {
+                        if (forShare) {
+                            type = effectiveMime
+                            putExtra(Intent.EXTRA_STREAM, probeUri)
+                        } else {
+                            setDataAndType(probeUri, effectiveMime)
+                        }
                     }
+                    val matches = queryIntentList(pm, exactIntent)
+                    val set = HashSet<String>(matches.size)
+                    for (info in matches) {
+                        info.activityInfo?.packageName?.let { set.add(it) }
+                    }
+                    set
                 }
-                val matches = queryIntentList(pm, exactIntent)
-                val set = HashSet<String>(matches.size)
-                for (info in matches) {
-                    info.activityInfo?.packageName?.let { set.add(it) }
-                }
-                set
             }
 
-            val currentCache = cachedAllApps
-            if (currentCache.isNotEmpty()) {
-                val filtered = if (includeAllApps) {
-                    currentCache
-                } else {
-                    currentCache.filter { exactPkgs.contains(it.packageName) }
-                }
-                return filtered.map { meta ->
-                    val pkg = meta.packageName
+            val sourceList = if (includeAllApps) {
+                currentCache
+            } else {
+                currentCache.filter { exactPkgs.contains(it.packageName) }
+            }
+
+            val result = ArrayList<ExternalAppTarget>(sourceList.size)
+            for (meta in sourceList) {
+                val pkg = meta.packageName
+                result.add(
                     ExternalAppTarget(
                         packageName = pkg,
                         activityName = meta.activityName,
                         label = meta.label,
+                        labelLower = meta.labelLower,
                         isPinned = isPinned(pkg),
                         usageCount = getUsageCount(pkg),
-                        isDirectMimeMatch = exactPkgs.contains(pkg),
+                        isDirectMimeMatch = true,
                         iconBitmap = meta.iconBitmap
                     )
-                }.sortedWith(
-                    compareByDescending<ExternalAppTarget> { it.isPinned }
-                        .thenByDescending { it.usageCount }
-                        .thenByDescending { it.isDirectMimeMatch }
-                        .thenBy { it.label.lowercase() }
                 )
             }
 
-            emptyList()
+            result.sortWith { a, b ->
+                if (a.isPinned != b.isPinned) {
+                    if (a.isPinned) -1 else 1
+                } else if (a.usageCount != b.usageCount) {
+                    b.usageCount.compareTo(a.usageCount)
+                } else {
+                    a.labelLower.compareTo(b.labelLower)
+                }
+            }
+            result
         } catch (_: Throwable) {
             emptyList()
         }
@@ -449,16 +462,15 @@ class AppRouterManager(private val context: Context) {
         } catch (_: Throwable) {
         }
 
-        // First try package-level VIEW / SEND with exact or wildcard MIME so Android routes to the right activity of that package
         try {
             val pkgIntent = Intent(if (forShare) Intent.ACTION_SEND else Intent.ACTION_VIEW).apply {
                 setPackage(pkg)
                 if (forShare) {
-                    type = if (target.isDirectMimeMatch) effectiveMime else "*/*"
+                    type = effectiveMime
                     putExtra(Intent.EXTRA_STREAM, safeUri)
                     clipData = ClipData.newRawUri("shared_file", safeUri)
                 } else {
-                    setDataAndType(safeUri, if (target.isDirectMimeMatch) effectiveMime else "*/*")
+                    setDataAndType(safeUri, effectiveMime)
                     clipData = ClipData.newRawUri("opened_file", safeUri)
                 }
                 addFlags(
@@ -472,7 +484,23 @@ class AppRouterManager(private val context: Context) {
         } catch (_: Throwable) {
         }
 
-        // Fallback 1: Explicit ComponentName with wildcard "*/*"
+        try {
+            val wildcardPkgIntent = Intent(if (forShare) Intent.ACTION_SEND else Intent.ACTION_VIEW).apply {
+                setPackage(pkg)
+                if (forShare) {
+                    type = "*/*"
+                    putExtra(Intent.EXTRA_STREAM, safeUri)
+                } else {
+                    setDataAndType(safeUri, "*/*")
+                }
+                clipData = ClipData.newRawUri("file", safeUri)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(wildcardPkgIntent)
+            return
+        } catch (_: Throwable) {
+        }
+
         try {
             val compIntent = Intent(if (forShare) Intent.ACTION_SEND else Intent.ACTION_VIEW).apply {
                 component = ComponentName(pkg, target.activityName)
@@ -490,7 +518,6 @@ class AppRouterManager(private val context: Context) {
         } catch (_: Throwable) {
         }
 
-        // Fallback 2: Launch app's main launcher activity
         try {
             val launchIntent = context.packageManager.getLaunchIntentForPackage(pkg)?.apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -527,7 +554,7 @@ class AppRouterManager(private val context: Context) {
     private fun drawableToScaledImageBitmap(drawable: Drawable?): ImageBitmap? {
         if (drawable == null) return null
         return try {
-            val targetPx = 80
+            val targetPx = 68
             if (drawable is BitmapDrawable && drawable.bitmap != null && !drawable.bitmap.isRecycled) {
                 val src = drawable.bitmap
                 val safeSrc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && src.config == Bitmap.Config.HARDWARE) {

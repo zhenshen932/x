@@ -11,8 +11,8 @@ android {
         applicationId = "com.omnimedia.hub"
         minSdk = 26
         targetSdk = 34
-        versionCode = 5
-        versionName = "4.0.0"
+        versionCode = 6
+        versionName = "5.0.0"
 
         vectorDrawables {
             useSupportLibrary = true
@@ -20,8 +20,13 @@ android {
     }
 
     buildTypes {
+        debug {
+            isDebuggable = false
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
