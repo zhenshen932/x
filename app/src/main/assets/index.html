@@ -1,0 +1,1303 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Chess Metallic Overlay</title>
+  <style>
+    :root {
+      --bg-alpha: 0.42;
+      --piece-alpha: 0.92;
+      --tg-spring: cubic-bezier(0.20, 0.92, 0.32, 1.04);
+      --ios-ease: cubic-bezier(0.32, 0.72, 0, 1);
+    }
+    * {
+      box-sizing: border-box;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-tap-highlight-color: transparent;
+      margin: 0;
+      padding: 0;
+    }
+    html, body {
+      width: 100vw;
+      height: 100vh;
+      background: transparent !important;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "HarmonyOS Sans SC", sans-serif;
+    }
+
+    .board-viewport {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      border: 1.5px solid rgba(255, 255, 255, 0.78);
+      box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.65);
+      background: transparent;
+      overflow: hidden;
+      touch-action: manipulation;
+      transition: border-color 0.28s var(--ios-ease), box-shadow 0.28s var(--ios-ease);
+    }
+    .board-viewport.passthrough-mode {
+      border-color: rgba(110, 231, 183, 0.55);
+    }
+    .board-viewport.editing-mode {
+      border: 2px solid rgba(255, 255, 255, 0.96);
+      box-shadow: inset 0 0 14px rgba(255, 255, 255, 0.26);
+    }
+
+    .grid-layer {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      grid-template-columns: repeat(8, 1fr);
+      grid-template-rows: repeat(8, 1fr);
+      z-index: 10;
+    }
+    .cell {
+      position: relative;
+      border: 0.5px solid rgba(255, 255, 255, calc(var(--bg-alpha) * 0.42));
+      transition: background 0.25s var(--ios-ease);
+      overflow: hidden;
+    }
+
+    .cell.light-sq {
+      background: linear-gradient(
+        135deg,
+        rgba(246, 248, 252, calc(var(--bg-alpha) * 0.95)) 0%,
+        rgba(228, 233, 242, calc(var(--bg-alpha) * 0.88)) 52%,
+        rgba(210, 218, 230, calc(var(--bg-alpha) * 0.92)) 100%
+      );
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, calc(var(--bg-alpha) * 0.65));
+    }
+
+    .cell.dark-sq {
+      background: linear-gradient(
+        135deg,
+        rgba(68, 79, 96, calc(var(--bg-alpha) * 0.96)) 0%,
+        rgba(43, 52, 66, calc(var(--bg-alpha) * 0.92)) 52%,
+        rgba(27, 34, 45, calc(var(--bg-alpha) * 0.96)) 100%
+      );
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, calc(var(--bg-alpha) * 0.18));
+    }
+
+    .cell-glow {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(14%) scale(0.92);
+      transition:
+        opacity 0.36s var(--tg-spring),
+        transform 0.36s var(--tg-spring);
+    }
+    .cell.ai-from .cell-glow {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      background:
+        radial-gradient(circle at 50% 82%, rgba(52, 211, 153, 0.58) 0%, rgba(16, 185, 129, 0.24) 52%, rgba(16, 185, 129, 0) 92%),
+        linear-gradient(to top, rgba(16, 185, 129, 0.48) 0%, rgba(52, 211, 153, 0.12) 55%, rgba(16, 185, 129, 0) 100%);
+    }
+    .cell.ai-to .cell-glow {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      transition-delay: 0.06s;
+      background:
+        radial-gradient(circle at 50% 74%, rgba(110, 231, 183, 0.92) 0%, rgba(16, 185, 129, 0.54) 48%, rgba(5, 150, 105, 0.08) 92%),
+        linear-gradient(to top, rgba(5, 150, 105, 0.82) 0%, rgba(52, 211, 153, 0.36) 64%, rgba(52, 211, 153, 0.04) 100%);
+      box-shadow: inset 0 -6px 14px rgba(110, 231, 183, 0.42);
+    }
+
+    .cell.selected .cell-glow {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      background:
+        radial-gradient(circle at 50% 72%, rgba(255, 255, 255, 0.72) 0%, rgba(226, 232, 240, 0.28) 58%, transparent 95%),
+        linear-gradient(to top, rgba(255, 255, 255, 0.45) 0%, transparent 80%);
+    }
+    .cell.last-opp .cell-glow {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      background:
+        radial-gradient(circle at 50% 75%, rgba(148, 163, 184, 0.42) 0%, rgba(100, 116, 139, 0.14) 60%, transparent 95%);
+    }
+
+    .tap-ripple {
+      position: absolute;
+      inset: 12%;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(255, 255, 255, 0.55) 0%, rgba(255, 255, 255, 0) 72%);
+      pointer-events: none;
+      z-index: 14;
+      animation: tgRipple 0.42s var(--ios-ease) forwards;
+    }
+    @keyframes tgRipple {
+      0% { opacity: 0.85; transform: scale(0.25); }
+      100% { opacity: 0; transform: scale(1.45); }
+    }
+
+    .legal-indicator {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+      z-index: 15;
+      animation: popIn 0.24s var(--tg-spring) forwards;
+    }
+    @keyframes popIn {
+      from { opacity: 0; transform: scale(0.35); }
+      to { opacity: 1; transform: scale(1); }
+    }
+    .legal-dot {
+      width: 24%;
+      height: 24%;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(255, 255, 255, 0.96) 0%, rgba(203, 213, 225, 0.78) 100%);
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+    }
+    .legal-capture {
+      width: 78%;
+      height: 78%;
+      border-radius: 50%;
+      border: 2px solid rgba(255, 255, 255, 0.88);
+      box-shadow: 0 0 10px rgba(255, 255, 255, 0.35), inset 0 0 8px rgba(255, 255, 255, 0.25);
+    }
+
+    .coord-rank, .coord-file {
+      position: absolute;
+      font-family: "Georgia", "Times New Roman", "Songti SC", serif;
+      font-size: clamp(9px, 2.5vw, 12px);
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      pointer-events: none;
+      z-index: 18;
+      line-height: 1;
+      transition: opacity 0.25s ease;
+    }
+    .coord-rank {
+      top: 3px;
+      left: 4px;
+    }
+    .coord-file {
+      bottom: 3px;
+      right: 4px;
+    }
+    .light-sq .coord-rank, .light-sq .coord-file {
+      color: rgba(30, 41, 59, 0.78);
+      text-shadow: 0 0.5px 0 rgba(255, 255, 255, 0.6);
+    }
+    .dark-sq .coord-rank, .dark-sq .coord-file {
+      color: rgba(241, 245, 249, 0.85);
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+    }
+
+    .pieces-layer {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 25;
+    }
+    .chess-piece {
+      position: absolute;
+      width: 12.5%;
+      height: 12.5%;
+      top: 0;
+      left: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      will-change: transform, opacity;
+      transition:
+        transform 0.34s var(--tg-spring),
+        opacity 0.22s var(--ios-ease);
+      opacity: var(--piece-alpha);
+    }
+    .chess-piece svg {
+      width: 82%;
+      height: 82%;
+      overflow: visible;
+      transition: transform 0.28s var(--tg-spring), filter 0.28s var(--ios-ease);
+    }
+    .chess-piece.moving-arc svg {
+      animation: pieceLiftArc 0.34s var(--tg-spring);
+    }
+    @keyframes pieceLiftArc {
+      0% { transform: scale(1) translateY(0); }
+      42% { transform: scale(1.16) translateY(-8%); filter: drop-shadow(0 8px 12px rgba(0,0,0,0.55)); }
+      100% { transform: scale(1) translateY(0); }
+    }
+    .chess-piece.spawn-pop svg {
+      animation: pieceSpawn 0.26s var(--tg-spring);
+    }
+    @keyframes pieceSpawn {
+      0% { transform: scale(0.35); opacity: 0.2; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+    .chess-piece.selected-piece svg {
+      transform: scale(1.13) translateY(-5%);
+      filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.65));
+    }
+    .chess-piece.captured {
+      opacity: 0 !important;
+      transform: scale(0.28) !important;
+    }
+
+    .side-modal {
+      position: absolute;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.80);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      z-index: 60;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 18px;
+      opacity: 1;
+      transition: opacity 0.26s var(--ios-ease), transform 0.26s var(--tg-spring);
+    }
+    .side-modal.hidden {
+      opacity: 0;
+      pointer-events: none;
+      transform: scale(0.95);
+    }
+    .modal-close-btn {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: rgba(20, 20, 24, 0.92);
+      border: 1px solid rgba(255, 255, 255, 0.65);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: transform 0.18s var(--tg-spring), background 0.18s ease;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    }
+    .modal-close-btn:active {
+      transform: scale(0.88);
+      background: rgba(55, 55, 62, 0.95);
+    }
+    .modal-row {
+      display: flex;
+      gap: 18px;
+    }
+    .side-btn {
+      width: 112px;
+      height: 112px;
+      border-radius: 18px;
+      background: rgba(12, 12, 14, 0.92);
+      border: 1px solid rgba(255, 255, 255, 0.75);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      color: #ffffff;
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      cursor: pointer;
+      transition: transform 0.18s var(--tg-spring), background 0.18s ease;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+    }
+    .side-btn:active {
+      transform: scale(0.92);
+      background: rgba(40, 40, 46, 0.95);
+    }
+    .side-btn svg {
+      width: 46px;
+      height: 46px;
+    }
+  </style>
+</head>
+<body>
+  <svg width="0" height="0" style="position:absolute">
+    <defs>
+      <linearGradient id="wBody" x1="15%" y1="0%" x2="88%" y2="100%">
+        <stop offset="0%" stop-color="#FFFFFF" />
+        <stop offset="46%" stop-color="#F1F5F9" />
+        <stop offset="82%" stop-color="#CBD5E1" />
+        <stop offset="100%" stop-color="#94A3B8" />
+      </linearGradient>
+      <linearGradient id="wBase" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#F8FAFC" />
+        <stop offset="55%" stop-color="#CBD5E1" />
+        <stop offset="100%" stop-color="#64748B" />
+      </linearGradient>
+      <linearGradient id="bBody" x1="12%" y1="0%" x2="90%" y2="100%">
+        <stop offset="0%" stop-color="#64748B" />
+        <stop offset="35%" stop-color="#334155" />
+        <stop offset="76%" stop-color="#1E293B" />
+        <stop offset="100%" stop-color="#090D16" />
+      </linearGradient>
+      <linearGradient id="bRim" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#E2E8F0" />
+        <stop offset="50%" stop-color="#94A3B8" />
+        <stop offset="100%" stop-color="#475569" />
+      </linearGradient>
+      <linearGradient id="bBase" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#475569" />
+        <stop offset="55%" stop-color="#1E293B" />
+        <stop offset="100%" stop-color="#020617" />
+      </linearGradient>
+      <radialGradient id="pieceShadow" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stop-color="rgba(0,0,0,0.55)" />
+        <stop offset="68%" stop-color="rgba(0,0,0,0.22)" />
+        <stop offset="100%" stop-color="rgba(0,0,0,0)" />
+      </radialGradient>
+    </defs>
+  </svg>
+
+  <div id="boardViewport" class="board-viewport">
+    <div id="gridLayer" class="grid-layer"></div>
+    <div id="piecesLayer" class="pieces-layer"></div>
+
+    <div id="sideModal" class="side-modal">
+      <div class="modal-close-btn" onclick="closeEntireOverlay()" title="关闭悬浮窗">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <path d="M2.5 2.5L11.5 11.5M11.5 2.5L2.5 11.5" stroke="#FFFFFF" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div class="modal-row">
+        <div class="side-btn" onclick="startNewGame('w')">
+          <svg viewBox="0 0 45 45" id="previewWhiteKing"></svg>
+          <span>执白</span>
+        </div>
+        <div class="side-btn" onclick="startNewGame('b')">
+          <svg viewBox="0 0 45 45" id="previewBlackKing"></svg>
+          <span>执黑</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+const FILES = ['a','b','c','d','e','f','g','h'];
+const VALS = { P:100, N:320, B:330, R:500, Q:900, K:20000 };
+
+function getPieceSvgInner(color, type) {
+  const isW = color === 'w';
+  const body = isW ? 'url(#wBody)' : 'url(#bBody)';
+  const base = isW ? 'url(#wBase)' : 'url(#bBase)';
+  const rim = isW ? '#334155' : 'url(#bRim)';
+  const hiLine = isW ? 'rgba(255,255,255,0.85)' : 'rgba(226,232,240,0.42)';
+  const shadowFill = isW ? 'rgba(30,41,59,0.16)' : 'rgba(2,6,23,0.45)';
+  const sw = '0.85';
+
+  const pedestal = `
+    <ellipse cx="22.5" cy="39.4" rx="13.5" ry="2.5" fill="url(#pieceShadow)"/>
+    <path d="M 12.2,33.2 L 32.8,33.2 L 34.4,35.7 L 10.6,35.7 Z" fill="${base}" stroke="${rim}" stroke-width="${sw}" stroke-linejoin="round"/>
+    <path d="M 9.8,35.7 L 35.2,35.7 L 35.2,38.4 L 9.8,38.4 Z" fill="${base}" stroke="${rim}" stroke-width="${sw}" stroke-linejoin="round"/>
+    <line x1="11.2" y1="35.7" x2="33.8" y2="35.7" stroke="${hiLine}" stroke-width="0.7"/>
+  `;
+
+  switch (type) {
+    case 'P':
+      return `
+        ${pedestal}
+        <path d="M 18.6,20.4 C 17.8,25.2 15.2,29.4 13.6,33.2 L 31.4,33.2 C 29.8,29.4 27.2,25.2 26.4,20.4 Z" fill="${body}" stroke="${rim}" stroke-width="${sw}" stroke-linejoin="round"/>
+        <path d="M 22.5,20.4 L 26.4,20.4 C 27.2,25.2 29.8,29.4 31.4,33.2 L 22.5,33.2 Z" fill="${shadowFill}"/>
+        <path d="M 17.0,18.2 L 28.0,18.2 L 27.1,20.4 L 17.9,20.4 Z" fill="${base}" stroke="${rim}" stroke-width="${sw}" stroke-linejoin="round"/>
+        <circle cx="22.5" cy="13.4" r="4.6" fill="${body}" stroke="${rim}" stroke-width="${sw}"/>
+        <circle cx="20.8" cy="11.8" r="1.3" fill="${hiLine}"/>
+      `;
+    case 'R':
+      return `
+        ${pedestal}
+        <path d="M 15.8,18.6 L 14.0,33.2 L 31.0,33.2 L 29.2,18.6 Z" fill="${body}" stroke="${rim}" stroke-width="${sw}" stroke-linejoin="round"/>
+        <path d="M 22.5,18.6 L 29.2,18.6 L 31.0,33.2 L 22.5,33.2 Z" fill="${shadowFill}"/>
+        <path d="M 14.2,16.2 L 30.8,16.2 L 29.5,18.6 L 15.5,18.6 Z" fill="${base}" stroke="${rim}" stroke-width="${sw}" stroke-linejoin="round"/>
+        <path d="M 12.6,9.8 L 16.3,9.8 L 16.3,12.6 L 20.1,12.6 L 20.1,9.8 L 24.9,9.8 L 24.9,12.6 L 28.7,12.6 L 28.7,9.8 L 32.4,9.8 L 32.4,16.2 L 12.6,16.2 Z" fill="${body}" stroke="${rim}" stroke-width="${sw}" stroke-linejoin="round"/>
+        <line x1="13.5" y1="15.4" x2="31.5" y2="15.4" stroke="${hiLine}" stroke-width="0.7"/>
+      `;
+    case 'N':
+      return `
+        ${pedestal}
+        <path d="M 14.2,33.2 C 14.2,25.6 19.6,22.4 20.0,18.4 C 17.0,19.4 13.6,20.8 11.2,19.2 C 10.0,18.4 11.2,15.0 14.8,12.8 L 16.6,9.0 L 19.4,11.3 C 27.0,11.2 33.0,17.2 32.5,33.2 Z" fill="${body}" stroke="${rim}" stroke-width="${sw}" stroke-linejoin="round"/>
+        <path d="M 23.5,12.4 C 28.5,14.8 31.5,20.8 31.2,33.2 L 26.8,33.2 C 27.2,23.5 25.6,16.8 22.0,13.5 Z" fill="${shadowFill}"/>
+        <path d="M 24.8,14.2 C 27.8,17.4 29.0,22.6 28.8,29.0" fill="none" stroke="${hiLine}" stroke-width="0.95" stroke-linecap="round"/>
+        <circle cx="16.4" cy="14.2" r="1.05" fill="${rim}"/>
+      `;
+    case 'B':
+      return `
+        ${pedestal}
+        <path d="M 18.0,24.6 C 17.2,27.8 15.4,30.6 14.0,33.2 L 31.0,33.2 C 29.6,30.6 27.8,27.8 27.0,24.6 Z" fill="${body}" stroke="${rim}" stroke-width="${sw}" stroke-linejoin="round"/>
+        <path d="M 16.0,22.2 L 29.0,22.2 L 28.1,24.6 L 16.9,24.6 Z" fill="${base}" stroke="${rim}" stroke-width="${sw}" stroke-linejoin="round"/>
+        <path d="M 22.5,9.4 C 17.2,12.4 15.4,17.4 17.6,22.2 L 27.4,22.2 C 29.6,17.4 27.8,12.4 22.5,9.4 Z" fill="${body}" stroke="${rim}" stroke-width="${sw}" stroke-linejoin="round"/>
+        <path d="M 22.5,9.4 C 27.8,12.4 29.6,17.4 27.4,22.2 L 22.5,22.2 Z" fill="${shadowFill}"/>
+        <line x1="22.8" y1="13.0" x2="26.6" y2="16.8" stroke="${rim}" stroke-width="1.35" stroke-linecap="round"/>
+        <circle cx="22.5" cy="7.2" r="2.0" fill="${body}" stroke="${rim}" stroke-width="${sw}"/>
+      `;
+    case 'Q':
+      return `
+        ${pedestal}
+        <path d="M 16.4,26.0 C 16.0,28.8 14.8,31.0 13.6,33.2 L 31.4,33.2 C 30.2,31.0 29.0,28.8 28.6,26.0 Z" fill="${body}" stroke="${rim}" stroke-width="${sw}" stroke-linejoin="round"/>
+        <path d="M 15.0,23.8 L 30.0,23.8 L 29.1,26.0 L 15.9,26.0 Z" fill="${base}" stroke="${rim}" stroke-width="${sw}" stroke-linejoin="round"/>
+        <path d="M 10.2,13.2 L 14.8,21.4 L 17.4,11.6 L 21.0,21.0 L 22.5,10.0 L 24.0,21.0 L 27.6,11.6 L 30.2,21.4 L 34.8,13.2 L 30.2,23.8 L 14.8,23.8 Z" fill="${body}" stroke="${rim}" stroke-width="${sw}" stroke-linejoin="round"/>
+        <path d="M 22.5,10.0 L 24.0,21.0 L 27.6,11.6 L 30.2,21.4 L 34.8,13.2 L 30.2,23.8 L 22.5,23.8 Z" fill="${shadowFill}"/>
+        <circle cx="10.0" cy="11.8" r="1.4" fill="${body}" stroke="${rim}" stroke-width="0.75"/>
+        <circle cx="17.1" cy="10.2" r="1.4" fill="${body}" stroke="${rim}" stroke-width="0.75"/>
+        <circle cx="22.5" cy="8.8" r="1.55" fill="${body}" stroke="${rim}" stroke-width="0.75"/>
+        <circle cx="27.9" cy="10.2" r="1.4" fill="${body}" stroke="${rim}" stroke-width="0.75"/>
+        <circle cx="35.0" cy="11.8" r="1.4" fill="${body}" stroke="${rim}" stroke-width="0.75"/>
+      `;
+    case 'K':
+      return `
+        ${pedestal}
+        <path d="M 15.8,25.2 L 13.8,33.2 L 31.2,33.2 L 29.2,25.2 Z" fill="${body}" stroke="${rim}" stroke-width="${sw}" stroke-linejoin="round"/>
+        <path d="M 22.5,25.2 L 29.2,25.2 L 31.2,33.2 L 22.5,33.2 Z" fill="${shadowFill}"/>
+        <path d="M 14.0,22.8 L 31.0,22.8 L 30.0,25.2 L 15.0,25.2 Z" fill="${base}" stroke="${rim}" stroke-width="${sw}" stroke-linejoin="round"/>
+        <path d="M 14.4,22.8 L 11.4,15.2 C 14.2,13.4 18.0,14.5 19.4,17.0 C 20.1,13.2 24.9,13.2 25.6,17.0 C 27.0,14.5 30.8,13.4 33.6,15.2 L 30.6,22.8 Z" fill="${body}" stroke="${rim}" stroke-width="${sw}" stroke-linejoin="round"/>
+        <path d="M 22.5,13.8 C 24.2,13.8 25.2,15.2 25.6,17.0 C 27.0,14.5 30.8,13.4 33.6,15.2 L 30.6,22.8 L 22.5,22.8 Z" fill="${shadowFill}"/>
+        <line x1="22.5" y1="14.0" x2="22.5" y2="22.5" stroke="${hiLine}" stroke-width="0.95"/>
+        <path d="M 21.6,4.5 L 23.4,4.5 L 23.4,6.4 L 25.4,6.4 L 25.4,8.1 L 23.4,8.1 L 23.4,10.5 L 21.6,10.5 L 21.6,8.1 L 19.6,8.1 L 19.6,6.4 L 21.6,6.4 Z" fill="${body}" stroke="${rim}" stroke-width="0.75" stroke-linejoin="round"/>
+      `;
+  }
+  return '';
+}
+
+document.getElementById('previewWhiteKing').innerHTML = getPieceSvgInner('w', 'K');
+document.getElementById('previewBlackKing').innerHTML = getPieceSvgInner('b', 'K');
+
+let aiColor = 'w';
+let oppColor = 'b';
+let state = null;
+let historyStack = [];
+let selectedSq = null;
+let legalTargets = [];
+let lastAiMove = null;
+let lastOppMove = null;
+let isThinking = false;
+let searchWatchdog = null;
+let currentSearchToken = 0;
+
+// 自定义局面编辑状态
+let isCustomEditing = false;
+let editBackup = null;
+let editTool = { mode: 'move', color: 'w', type: 'P' };
+let editSelectedSq = null;
+let customPieceUid = 1000;
+
+function setBoardOpacity(percent) {
+  const val = Math.max(0, Math.min(100, Number(percent))) / 100;
+  document.documentElement.style.setProperty('--bg-alpha', val.toFixed(2));
+}
+
+function setPieceOpacity(percent) {
+  const val = Math.max(0, Math.min(100, Number(percent))) / 100;
+  document.documentElement.style.setProperty('--piece-alpha', val.toFixed(2));
+}
+
+function setVisualPassThrough(isPass) {
+  const vp = document.getElementById('boardViewport');
+  if (isPass) vp.classList.add('passthrough-mode');
+  else vp.classList.remove('passthrough-mode');
+}
+
+function closeEntireOverlay() {
+  if (window.AndroidBridge && window.AndroidBridge.closeOverlay) {
+    window.AndroidBridge.closeOverlay();
+  }
+}
+
+function showNativeToast(msg) {
+  if (window.AndroidBridge && window.AndroidBridge.showToast) {
+    window.AndroidBridge.showToast(msg);
+  }
+}
+
+function notifyNative(statusText, moveText, shouldPassThrough) {
+  if (window.AndroidBridge && window.AndroidBridge.onStateChanged) {
+    window.AndroidBridge.onStateChanged(statusText, moveText, !!shouldPassThrough);
+  }
+}
+
+function createInitialState() {
+  const b = Array(8).fill(null).map(() => Array(8).fill(null));
+  const back = ['R','N','B','Q','K','B','N','R'];
+  let uid = 1;
+  for (let c = 0; c < 8; c++) {
+    b[0][c] = { id: 'p' + (uid++), color: 'b', type: back[c] };
+    b[1][c] = { id: 'p' + (uid++), color: 'b', type: 'P' };
+    b[6][c] = { id: 'p' + (uid++), color: 'w', type: 'P' };
+    b[7][c] = { id: 'p' + (uid++), color: 'w', type: back[c] };
+  }
+  return {
+    board: b,
+    turn: 'w',
+    castling: { wK: true, wQ: true, bK: true, bQ: true },
+    ep: null,
+    fullmove: 1
+  };
+}
+
+function cloneState(s) {
+  return {
+    board: s.board.map(r => r.map(c => c ? { id: c.id, color: c.color, type: c.type } : null)),
+    turn: s.turn,
+    castling: { ...s.castling },
+    ep: s.ep ? { ...s.ep } : null,
+    fullmove: s.fullmove
+  };
+}
+
+function toScreenRC(r, c) {
+  return aiColor === 'w' ? { sr: r, sc: c } : { sr: 7 - r, sc: 7 - c };
+}
+function toBoardRC(sr, sc) {
+  return aiColor === 'w' ? { r: sr, c: sc } : { r: 7 - sr, c: 7 - sc };
+}
+function rcToAlg(r, c) {
+  return FILES[c] + (8 - r);
+}
+function inBounds(r, c) { return r >= 0 && r < 8 && c >= 0 && c < 8; }
+
+function isSquareAttacked(s, r, c, attackerColor) {
+  const b = s.board;
+  const pRow = attackerColor === 'w' ? r + 1 : r - 1;
+  if (inBounds(pRow, c - 1) && b[pRow][c - 1]?.color === attackerColor && b[pRow][c - 1]?.type === 'P') return true;
+  if (inBounds(pRow, c + 1) && b[pRow][c + 1]?.color === attackerColor && b[pRow][c + 1]?.type === 'P') return true;
+
+  const kn = [[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]];
+  for (const [dr, dc] of kn) {
+    const nr = r + dr, nc = c + dc;
+    if (inBounds(nr, nc) && b[nr][nc]?.color === attackerColor && b[nr][nc]?.type === 'N') return true;
+  }
+  for (let dr = -1; dr <= 1; dr++) {
+    for (let dc = -1; dc <= 1; dc++) {
+      if (!dr && !dc) continue;
+      const nr = r + dr, nc = c + dc;
+      if (inBounds(nr, nc) && b[nr][nc]?.color === attackerColor && b[nr][nc]?.type === 'K') return true;
+    }
+  }
+  const dirs = [[-1,0,'R'],[1,0,'R'],[0,-1,'R'],[0,1,'R'],[-1,-1,'B'],[-1,1,'B'],[1,-1,'B'],[1,1,'B']];
+  for (const [dr, dc, t] of dirs) {
+    let nr = r + dr, nc = c + dc;
+    while (inBounds(nr, nc)) {
+      const p = b[nr][nc];
+      if (p) {
+        if (p.color === attackerColor && (p.type === t || p.type === 'Q')) return true;
+        break;
+      }
+      nr += dr; nc += dc;
+    }
+  }
+  return false;
+}
+
+function isInCheck(s, color) {
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const p = s.board[r][c];
+      if (p && p.color === color && p.type === 'K') {
+        return isSquareAttacked(s, r, c, color === 'w' ? 'b' : 'w');
+      }
+    }
+  }
+  return false;
+}
+
+function applyMove(s, m) {
+  const ns = cloneState(s);
+  const b = ns.board;
+  const p = b[m.fr][m.fc];
+  b[m.fr][m.fc] = null;
+
+  if (m.epCapture) {
+    const capR = p.color === 'w' ? m.tr + 1 : m.tr - 1;
+    b[capR][m.tc] = null;
+  }
+  if (m.castle === 'K') {
+    b[m.fr][5] = b[m.fr][7];
+    b[m.fr][7] = null;
+  } else if (m.castle === 'Q') {
+    b[m.fr][3] = b[m.fr][0];
+    b[m.fr][0] = null;
+  }
+
+  b[m.tr][m.tc] = { id: p.id, color: p.color, type: m.promo || p.type };
+
+  ns.ep = null;
+  if (p.type === 'P' && Math.abs(m.tr - m.fr) === 2) {
+    ns.ep = { r: (m.fr + m.tr) >> 1, c: m.fc };
+  }
+  if (p.type === 'K') {
+    if (p.color === 'w') { ns.castling.wK = false; ns.castling.wQ = false; }
+    else { ns.castling.bK = false; ns.castling.bQ = false; }
+  }
+  if ((m.fr === 7 && m.fc === 7) || (m.tr === 7 && m.tc === 7)) ns.castling.wK = false;
+  if ((m.fr === 7 && m.fc === 0) || (m.tr === 7 && m.tc === 0)) ns.castling.wQ = false;
+  if ((m.fr === 0 && m.fc === 7) || (m.tr === 0 && m.tc === 7)) ns.castling.bK = false;
+  if ((m.fr === 0 && m.fc === 0) || (m.tr === 0 && m.tc === 0)) ns.castling.bQ = false;
+
+  ns.turn = s.turn === 'w' ? 'b' : 'w';
+  if (ns.turn === 'w') ns.fullmove++;
+  return ns;
+}
+
+function getLegalMoves(s, color = s.turn) {
+  const b = s.board;
+  const pseudo = [];
+  const opp = color === 'w' ? 'b' : 'w';
+
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const p = b[r][c];
+      if (!p || p.color !== color) continue;
+
+      if (p.type === 'P') {
+        const dir = color === 'w' ? -1 : 1;
+        const startR = color === 'w' ? 6 : 1;
+        const promoR = color === 'w' ? 0 : 7;
+        const nr = r + dir;
+        if (inBounds(nr, c) && !b[nr][c]) {
+          if (nr === promoR) pseudo.push({ fr:r, fc:c, tr:nr, tc:c, promo:'Q' });
+          else {
+            pseudo.push({ fr:r, fc:c, tr:nr, tc:c });
+            const nnr = r + dir * 2;
+            if (r === startR && !b[nnr][c]) pseudo.push({ fr:r, fc:c, tr:nnr, tc:c });
+          }
+        }
+        for (const dc of [-1, 1]) {
+          const nc = c + dc;
+          if (!inBounds(nr, nc)) continue;
+          const target = b[nr][nc];
+          if (target && target.color === opp && target.type !== 'K') {
+            if (nr === promoR) pseudo.push({ fr:r, fc:c, tr:nr, tc:nc, promo:'Q' });
+            else pseudo.push({ fr:r, fc:c, tr:nr, tc:nc });
+          } else if (s.ep && s.ep.r === nr && s.ep.c === nc) {
+            pseudo.push({ fr:r, fc:c, tr:nr, tc:nc, epCapture:true });
+          }
+        }
+      } else if (p.type === 'N') {
+        for (const [dr, dc] of [[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]]) {
+          const nr = r + dr, nc = c + dc;
+          if (!inBounds(nr, nc)) continue;
+          const t = b[nr][nc];
+          if (!t || (t.color === opp && t.type !== 'K')) pseudo.push({ fr:r, fc:c, tr:nr, tc:nc });
+        }
+      } else if (p.type === 'K') {
+        for (let dr = -1; dr <= 1; dr++) {
+          for (let dc = -1; dc <= 1; dc++) {
+            if (!dr && !dc) continue;
+            const nr = r + dr, nc = c + dc;
+            if (!inBounds(nr, nc)) continue;
+            const t = b[nr][nc];
+            if (!t || (t.color === opp && t.type !== 'K')) pseudo.push({ fr:r, fc:c, tr:nr, tc:nc });
+          }
+        }
+        const row = color === 'w' ? 7 : 0;
+        if (r === row && c === 4 && !isSquareAttacked(s, row, 4, opp)) {
+          const canK = color === 'w' ? s.castling.wK : s.castling.bK;
+          const canQ = color === 'w' ? s.castling.wQ : s.castling.bQ;
+          if (canK && !b[row][5] && !b[row][6] && !isSquareAttacked(s, row, 5, opp) && !isSquareAttacked(s, row, 6, opp)) {
+            pseudo.push({ fr:row, fc:4, tr:row, tc:6, castle:'K' });
+          }
+          if (canQ && !b[row][3] && !b[row][2] && !b[row][1] && !isSquareAttacked(s, row, 3, opp) && !isSquareAttacked(s, row, 2, opp)) {
+            pseudo.push({ fr:row, fc:4, tr:row, tc:2, castle:'Q' });
+          }
+        }
+      } else {
+        const dirs = [];
+        if (p.type === 'R' || p.type === 'Q') dirs.push([-1,0],[1,0],[0,-1],[0,1]);
+        if (p.type === 'B' || p.type === 'Q') dirs.push([-1,-1],[-1,1],[1,-1],[1,1]);
+        for (const [dr, dc] of dirs) {
+          let nr = r + dr, nc = c + dc;
+          while (inBounds(nr, nc)) {
+            const t = b[nr][nc];
+            if (!t) pseudo.push({ fr:r, fc:c, tr:nr, tc:nc });
+            else {
+              if (t.color === opp && t.type !== 'K') pseudo.push({ fr:r, fc:c, tr:nr, tc:nc });
+              break;
+            }
+            nr += dr; nc += dc;
+          }
+        }
+      }
+    }
+  }
+  return pseudo.filter(m => !isInCheck(applyMove(s, m), color));
+}
+
+function toFEN(s) {
+  const rows = [];
+  for (let r = 0; r < 8; r++) {
+    let str = '', empty = 0;
+    for (let c = 0; c < 8; c++) {
+      const p = s.board[r][c];
+      if (!p) empty++;
+      else {
+        if (empty) { str += empty; empty = 0; }
+        str += p.color === 'w' ? p.type : p.type.toLowerCase();
+      }
+    }
+    if (empty) str += empty;
+    rows.push(str);
+  }
+  let cast = '';
+  if (s.castling.wK) cast += 'K';
+  if (s.castling.wQ) cast += 'Q';
+  if (s.castling.bK) cast += 'k';
+  if (s.castling.bQ) cast += 'q';
+  if (!cast) cast = '-';
+  const ep = s.ep ? rcToAlg(s.ep.r, s.ep.c) : '-';
+  return `${rows.join('/')} ${s.turn} ${cast} ${ep} 0 ${s.fullmove}`;
+}
+
+const cellDomMap = Array(8).fill(null).map(() => Array(8).fill(null));
+const prevPosMap = new Map();
+
+function spawnCellRipple(r, c) {
+  const cell = cellDomMap[r][c];
+  if (!cell) return;
+  const rip = document.createElement('div');
+  rip.className = 'tap-ripple';
+  cell.appendChild(rip);
+  setTimeout(() => { if (rip.parentNode) rip.remove(); }, 440);
+}
+
+function buildStaticGrid() {
+  const grid = document.getElementById('gridLayer');
+  grid.innerHTML = '';
+  for (let sr = 0; sr < 8; sr++) {
+    for (let sc = 0; sc < 8; sc++) {
+      const { r, c } = toBoardRC(sr, sc);
+      const cell = document.createElement('div');
+      const isLight = (r + c) % 2 === 0;
+      cell.className = `cell ${isLight ? 'light-sq' : 'dark-sq'}`;
+
+      const glow = document.createElement('div');
+      glow.className = 'cell-glow';
+      cell.appendChild(glow);
+
+      if (sc === 0) {
+        const rk = document.createElement('span');
+        rk.className = 'coord-rank';
+        rk.textContent = 8 - r;
+        cell.appendChild(rk);
+      }
+      if (sr === 7) {
+        const fl = document.createElement('span');
+        fl.className = 'coord-file';
+        fl.textContent = FILES[c];
+        cell.appendChild(fl);
+      }
+
+      cell.onclick = () => onSquareTap(r, c);
+      grid.appendChild(cell);
+      cellDomMap[r][c] = cell;
+    }
+  }
+}
+
+function syncBoardVisuals() {
+  const activeSel = isCustomEditing ? editSelectedSq : selectedSq;
+
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const cell = cellDomMap[r][c];
+      if (!cell) continue;
+      cell.classList.remove('selected', 'ai-from', 'ai-to', 'last-opp');
+
+      const oldInd = cell.querySelector('.legal-indicator');
+      if (oldInd) oldInd.remove();
+
+      if (activeSel && activeSel.r === r && activeSel.c === c) {
+        cell.classList.add('selected');
+      }
+      if (!isCustomEditing) {
+        if (lastAiMove && lastAiMove.fr === r && lastAiMove.fc === c) {
+          cell.classList.add('ai-from');
+        }
+        if (lastAiMove && lastAiMove.tr === r && lastAiMove.tc === c) {
+          cell.classList.add('ai-to');
+        }
+        if (lastOppMove && ((lastOppMove.fr === r && lastOppMove.fc === c) || (lastOppMove.tr === r && lastOppMove.tc === c))) {
+          cell.classList.add('last-opp');
+        }
+        const isTarget = legalTargets.some(m => m.tr === r && m.tc === c);
+        if (isTarget) {
+          const ind = document.createElement('div');
+          ind.className = 'legal-indicator';
+          const inner = document.createElement('div');
+          inner.className = state.board[r][c] ? 'legal-capture' : 'legal-dot';
+          ind.appendChild(inner);
+          cell.appendChild(ind);
+        }
+      }
+    }
+  }
+
+  const piecesLayer = document.getElementById('piecesLayer');
+  const activeIds = new Set();
+
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const p = state.board[r][c];
+      if (!p) continue;
+      activeIds.add(p.id);
+
+      const { sr, sc } = toScreenRC(r, c);
+      const posKey = `${sr},${sc}`;
+      let el = document.getElementById('piece-' + p.id);
+
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'piece-' + p.id;
+        el.className = 'chess-piece' + (isCustomEditing ? ' spawn-pop' : '');
+        el.dataset.type = p.type;
+        el.dataset.color = p.color;
+        el.innerHTML = `<svg viewBox="0 0 45 45">${getPieceSvgInner(p.color, p.type)}</svg>`;
+        el.style.transform = `translate3d(${sc * 100}%, ${sr * 100}%, 0)`;
+        piecesLayer.appendChild(el);
+        prevPosMap.set(p.id, posKey);
+      } else {
+        if (el.dataset.type !== p.type || el.dataset.color !== p.color) {
+          el.dataset.type = p.type;
+          el.dataset.color = p.color;
+          el.innerHTML = `<svg viewBox="0 0 45 45">${getPieceSvgInner(p.color, p.type)}</svg>`;
+        }
+        el.classList.remove('captured');
+
+        if (prevPosMap.get(p.id) !== posKey) {
+          prevPosMap.set(p.id, posKey);
+          el.classList.remove('moving-arc');
+          void el.offsetWidth;
+          el.classList.add('moving-arc');
+        }
+        el.style.transform = `translate3d(${sc * 100}%, ${sr * 100}%, 0)`;
+      }
+
+      if (activeSel && activeSel.r === r && activeSel.c === c) {
+        el.classList.add('selected-piece');
+      } else {
+        el.classList.remove('selected-piece');
+      }
+    }
+  }
+
+  Array.from(piecesLayer.children).forEach(el => {
+    const pid = el.id.replace('piece-', '');
+    if (!activeIds.has(pid)) {
+      prevPosMap.delete(pid);
+      el.classList.add('captured');
+      setTimeout(() => {
+        if (el.parentNode && el.classList.contains('captured')) {
+          el.remove();
+        }
+      }, 250);
+    }
+  });
+}
+
+// ===== 自定义局面编辑逻辑 =====
+function enterCustomEdit() {
+  if (searchWatchdog) clearTimeout(searchWatchdog);
+  isThinking = false;
+  currentSearchToken++;
+
+  document.getElementById('sideModal').classList.add('hidden');
+  editBackup = {
+    state: cloneState(state),
+    lastAiMove: lastAiMove ? { ...lastAiMove } : null,
+    lastOppMove: lastOppMove ? { ...lastOppMove } : null
+  };
+  isCustomEditing = true;
+  selectedSq = null;
+  legalTargets = [];
+  editSelectedSq = null;
+  editTool = { mode: 'move', color: 'w', type: 'P' };
+  document.getElementById('boardViewport').classList.add('editing-mode');
+  syncBoardVisuals();
+}
+
+function setCustomEditTool(mode, color, type) {
+  editTool = {
+    mode: mode || 'move',
+    color: color || editTool.color || 'w',
+    type: type || editTool.type || 'P'
+  };
+  editSelectedSq = null;
+  syncBoardVisuals();
+}
+
+function resetCustomEdit() {
+  if (!isCustomEditing || !editBackup) return;
+  state = cloneState(editBackup.state);
+  editSelectedSq = null;
+  prevPosMap.clear();
+  document.getElementById('piecesLayer').innerHTML = '';
+  syncBoardVisuals();
+}
+
+function cancelCustomEdit() {
+  if (!isCustomEditing) return;
+  if (editBackup) {
+    state = cloneState(editBackup.state);
+    lastAiMove = editBackup.lastAiMove;
+    lastOppMove = editBackup.lastOppMove;
+  }
+  isCustomEditing = false;
+  editSelectedSq = null;
+  editBackup = null;
+  document.getElementById('boardViewport').classList.remove('editing-mode');
+  prevPosMap.clear();
+  document.getElementById('piecesLayer').innerHTML = '';
+  syncBoardVisuals();
+}
+
+function confirmCustomEdit(nextTurnIsAi) {
+  if (!isCustomEditing) return;
+
+  // 校验棋盘必须包含唯一的白王与黑王
+  let wKings = 0, bKings = 0;
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const p = state.board[r][c];
+      if (!p) continue;
+      if (p.type === 'K') {
+        if (p.color === 'w') wKings++;
+        else bKings++;
+      }
+      // 校验兵不能位于底线 (第1行或第8行)
+      if (p.type === 'P' && (r === 0 || r === 7)) {
+        showNativeToast('兵不能放在底线，请移除或替换');
+        return;
+      }
+    }
+  }
+  if (wKings !== 1 || bKings !== 1) {
+    showNativeToast('棋盘上必须各保留一枚白王与黑王');
+    return;
+  }
+
+  const nextColor = nextTurnIsAi ? aiColor : oppColor;
+  const otherColor = nextColor === 'w' ? 'b' : 'w';
+
+  // 校验非行动方的王不能正处于被将军状态（否则无法由引擎合法搜索）
+  if (isInCheck(state, otherColor)) {
+    showNativeToast('局面非法：非行动方正被将军，请调整行动方或棋子');
+    return;
+  }
+
+  // 根据当前王车位置自动更新易位权限
+  const b = state.board;
+  state.turn = nextColor;
+  state.ep = null;
+  state.castling = {
+    wK: !!(b[7][4]?.color === 'w' && b[7][4]?.type === 'K' && b[7][7]?.color === 'w' && b[7][7]?.type === 'R'),
+    wQ: !!(b[7][4]?.color === 'w' && b[7][4]?.type === 'K' && b[7][0]?.color === 'w' && b[7][0]?.type === 'R'),
+    bK: !!(b[0][4]?.color === 'b' && b[0][4]?.type === 'K' && b[0][7]?.color === 'b' && b[0][7]?.type === 'R'),
+    bQ: !!(b[0][4]?.color === 'b' && b[0][4]?.type === 'K' && b[0][0]?.color === 'b' && b[0][0]?.type === 'R')
+  };
+
+  if (editBackup) {
+    historyStack.push(editBackup);
+  }
+  editBackup = null;
+  isCustomEditing = false;
+  editSelectedSq = null;
+  selectedSq = null;
+  legalTargets = [];
+  lastAiMove = null;
+  lastOppMove = null;
+  document.getElementById('boardViewport').classList.remove('editing-mode');
+  syncBoardVisuals();
+
+  if (window.AndroidBridge && window.AndroidBridge.onCustomEditClosed) {
+    window.AndroidBridge.onCustomEditClosed();
+  }
+
+  if (nextTurnIsAi) {
+    triggerAiResponse();
+  } else {
+    notifyNative('录入对手', '--', false);
+  }
+}
+
+function handleCustomEditTap(r, c) {
+  spawnCellRipple(r, c);
+  const b = state.board;
+
+  if (editTool.mode === 'erase') {
+    if (b[r][c]) {
+      b[r][c] = null;
+      syncBoardVisuals();
+    }
+    return;
+  }
+
+  if (editTool.mode === 'place') {
+    const cur = b[r][c];
+    if (cur && cur.color === editTool.color && cur.type === editTool.type) {
+      // 再次点击同格同子直接擦除，方便纠错
+      b[r][c] = null;
+    } else {
+      // 若放置王，自动移除同色旧王，保证每方唯一
+      if (editTool.type === 'K') {
+        for (let rr = 0; rr < 8; rr++) {
+          for (let cc = 0; cc < 8; cc++) {
+            if (b[rr][cc] && b[rr][cc].color === editTool.color && b[rr][cc].type === 'K') {
+              b[rr][cc] = null;
+            }
+          }
+        }
+      }
+      b[r][c] = {
+        id: 'c' + (++customPieceUid),
+        color: editTool.color,
+        type: editTool.type
+      };
+    }
+    syncBoardVisuals();
+    return;
+  }
+
+  // 默认模式: 自由移动任意一方棋子（无视回合与走法限制）
+  if (editSelectedSq) {
+    if (editSelectedSq.r === r && editSelectedSq.c === c) {
+      editSelectedSq = null;
+    } else {
+      const movingPiece = b[editSelectedSq.r][editSelectedSq.c];
+      b[editSelectedSq.r][editSelectedSq.c] = null;
+      b[r][c] = movingPiece;
+      editSelectedSq = null;
+    }
+    syncBoardVisuals();
+    return;
+  }
+
+  if (b[r][c]) {
+    editSelectedSq = { r, c };
+    syncBoardVisuals();
+  }
+}
+
+function onSquareTap(r, c) {
+  if (isCustomEditing) {
+    handleCustomEditTap(r, c);
+    return;
+  }
+  if (isThinking || state.turn !== oppColor) return;
+  spawnCellRipple(r, c);
+  const p = state.board[r][c];
+
+  if (selectedSq) {
+    const mv = legalTargets.find(m => m.tr === r && m.tc === c);
+    if (mv) {
+      historyStack.push({
+        state: cloneState(state),
+        lastAiMove,
+        lastOppMove
+      });
+      state = applyMove(state, mv);
+      lastOppMove = mv;
+      selectedSq = null;
+      legalTargets = [];
+      syncBoardVisuals();
+      triggerAiResponse();
+      return;
+    }
+  }
+
+  if (p && p.color === oppColor) {
+    selectedSq = { r, c };
+    legalTargets = getLegalMoves(state, oppColor).filter(m => m.fr === r && m.fc === c);
+  } else {
+    selectedSq = null;
+    legalTargets = [];
+  }
+  syncBoardVisuals();
+}
+
+function evaluateBoard(s, perspective) {
+  let score = 0;
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const p = s.board[r][c];
+      if (!p) continue;
+      let v = VALS[p.type];
+      if (r >= 2 && r <= 5 && c >= 2 && c <= 5) v += 18;
+      if (p.type === 'P') v += (p.color === 'w' ? (6 - r) : (r - 1)) * 12;
+      score += (p.color === perspective ? v : -v);
+    }
+  }
+  return score;
+}
+
+function localBestMove(s, depth = 4) {
+  const moves = getLegalMoves(s, s.turn);
+  if (!moves.length) return null;
+  moves.sort((a, b) => (s.board[b.tr][b.tc] ? 10 : 0) - (s.board[a.tr][a.tc] ? 10 : 0));
+
+  function alphabeta(st, d, alpha, beta) {
+    const legals = getLegalMoves(st, st.turn);
+    if (!legals.length) {
+      if (isInCheck(st, st.turn)) return -29000 - d;
+      return 0;
+    }
+    if (d === 0) return evaluateBoard(st, st.turn);
+    legals.sort((a, b) => (st.board[b.tr][b.tc] ? 10 : 0) - (st.board[a.tr][a.tc] ? 10 : 0));
+    for (const m of legals) {
+      const val = -alphabeta(applyMove(st, m), d - 1, -beta, -alpha);
+      if (val >= beta) return beta;
+      if (val > alpha) alpha = val;
+    }
+    return alpha;
+  }
+
+  let best = moves[0], bestVal = -Infinity;
+  for (const m of moves) {
+    const v = -alphabeta(applyMove(s, m), depth - 1, -Infinity, Infinity);
+    if (v > bestVal) { bestVal = v; best = m; }
+  }
+  return best;
+}
+
+async function fetchCloudBestMove(fen, legalMoves) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 1800);
+  try {
+    const u1 = `https://www.chessdb.cn/cdb.php?action=queryall&board=${encodeURIComponent(fen)}&json=1`;
+    const r1 = await fetch(u1, { signal: controller.signal });
+    const d1 = await r1.json();
+    clearTimeout(timer);
+    if (d1 && d1.moves && d1.moves.length > 0) {
+      const uci = d1.moves[0].uci;
+      const found = matchUci(uci, legalMoves);
+      if (found) return { move: found };
+    }
+  } catch (e) {}
+
+  const c2 = new AbortController();
+  const t2 = setTimeout(() => c2.abort(), 2000);
+  try {
+    const r2 = await fetch('https://chess-api.com/v1', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fen, depth: 16 }),
+      signal: c2.signal
+    });
+    const d2 = await r2.json();
+    clearTimeout(t2);
+    if (d2 && d2.move) {
+      const found = matchUci(d2.move, legalMoves);
+      if (found) return { move: found };
+    }
+  } catch (e) {}
+
+  return null;
+}
+
+function matchUci(uci, legalMoves) {
+  if (!uci || uci.length < 4) return null;
+  const fc = FILES.indexOf(uci[0]);
+  const fr = 8 - parseInt(uci[1], 10);
+  const tc = FILES.indexOf(uci[2]);
+  const tr = 8 - parseInt(uci[3], 10);
+  return legalMoves.find(m => m.fr === fr && m.fc === fc && m.tr === tr && m.tc === tc) || null;
+}
+
+async function triggerAiResponse() {
+  const legals = getLegalMoves(state, aiColor);
+  if (!legals.length) {
+    notifyNative('对局结束', '绝杀', false);
+    return;
+  }
+
+  isThinking = true;
+  const myToken = ++currentSearchToken;
+  notifyNative('计算中', '...', false);
+
+  if (searchWatchdog) clearTimeout(searchWatchdog);
+  searchWatchdog = setTimeout(() => {
+    if (isThinking && myToken === currentSearchToken) {
+      const fallback = localBestMove(state, 4);
+      commitAiMove(fallback);
+    }
+  }, 2400);
+
+  const fen = toFEN(state);
+  const cloudRes = await fetchCloudBestMove(fen, legals);
+  if (!isThinking || myToken !== currentSearchToken) return;
+
+  if (cloudRes && cloudRes.move) {
+    commitAiMove(cloudRes.move);
+  } else {
+    const localMv = localBestMove(state, 4);
+    commitAiMove(localMv);
+  }
+}
+
+function commitAiMove(mv) {
+  if (searchWatchdog) clearTimeout(searchWatchdog);
+  isThinking = false;
+  if (!mv) return;
+
+  const fromAlg = rcToAlg(mv.fr, mv.fc);
+  const toAlg = rcToAlg(mv.tr, mv.tc);
+  state = applyMove(state, mv);
+  lastAiMove = mv;
+  spawnCellRipple(mv.tr, mv.tc);
+  syncBoardVisuals();
+
+  notifyNative('请走棋', `${fromAlg} → ${toAlg}`, true);
+}
+
+function undoTurn() {
+  if (!historyStack.length) return;
+  if (searchWatchdog) clearTimeout(searchWatchdog);
+  isThinking = false;
+  const prev = historyStack.pop();
+  state = prev.state;
+  lastAiMove = prev.lastAiMove;
+  lastOppMove = prev.lastOppMove;
+  selectedSq = null;
+  legalTargets = [];
+  prevPosMap.clear();
+  document.getElementById('piecesLayer').innerHTML = '';
+  syncBoardVisuals();
+  notifyNative('录入对手', lastAiMove ? `${rcToAlg(lastAiMove.fr,lastAiMove.fc)} → ${rcToAlg(lastAiMove.tr,lastAiMove.tc)}` : '--', false);
+}
+
+function openPicker() {
+  document.getElementById('sideModal').classList.remove('hidden');
+  notifyNative('选择执棋', '--', false);
+}
+
+function startNewGame(color) {
+  if (searchWatchdog) clearTimeout(searchWatchdog);
+  isThinking = false;
+  aiColor = color;
+  oppColor = color === 'w' ? 'b' : 'w';
+  state = createInitialState();
+  historyStack = [];
+  selectedSq = null;
+  legalTargets = [];
+  lastAiMove = null;
+  lastOppMove = null;
+  prevPosMap.clear();
+  document.getElementById('sideModal').classList.add('hidden');
+  document.getElementById('piecesLayer').innerHTML = '';
+  buildStaticGrid();
+  syncBoardVisuals();
+  if (aiColor === 'w') {
+    triggerAiResponse();
+  } else {
+    notifyNative('录入对手', '--', false);
+  }
+}
+
+state = createInitialState();
+buildStaticGrid();
+syncBoardVisuals();
+</script>
+</body>
+</html>
