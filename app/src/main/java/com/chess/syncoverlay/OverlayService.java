@@ -122,6 +122,7 @@ public class OverlayService extends Service {
     private ValueAnimator activeSnapAnimator;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private Runnable autoSwitchRunnable;
+    private final NativeEngineManager engineManager = new NativeEngineManager();
 
     @Override
     public IBinder onBind(Intent intent) {
@@ -1412,6 +1413,26 @@ public class OverlayService extends Service {
         public void onCustomEditClosed() {
             mainHandler.post(() -> exitCustomEditMode(false));
         }
+
+        @JavascriptInterface
+        public void cancelEngine() {
+            engineManager.cancelCurrent();
+        }
+
+        @JavascriptInterface
+        public void requestBestMove(final String fen, final int token, final String legalMovesCsv) {
+            engineManager.requestBestMove(fen, token, legalMovesCsv, (resToken, uci, sourceTag) -> {
+                mainHandler.post(() -> {
+                    if (webView == null) return;
+                    String safeUci = (uci == null) ? "" : uci.replace("'", "");
+                    String safeTag = (sourceTag == null) ? "" : sourceTag.replace("'", "");
+                    webView.evaluateJavascript(
+                            "onNativeEngineResult(" + resToken + ",'" + safeUci + "','" + safeTag + "')",
+                            null
+                    );
+                });
+            });
+        }
     }
 
     @Override
@@ -1419,6 +1440,7 @@ public class OverlayService extends Service {
         super.onDestroy();
         isRunning = false;
         cancelAutoReturn();
+        engineManager.shutdown();
         if (activeSnapAnimator != null) activeSnapAnimator.cancel();
         if (isEditorDockAttached && editorDockRoot != null) {
             try {

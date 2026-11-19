@@ -658,8 +658,9 @@ function getLegalMoves(s, color = s.turn) {
         const promoR = color === 'w' ? 0 : 7;
         const nr = r + dir;
         if (inBounds(nr, c) && !b[nr][c]) {
-          if (nr === promoR) pseudo.push({ fr:r, fc:c, tr:nr, tc:c, promo:'Q' });
-          else {
+          if (nr === promoR) {
+            for (const pr of ['Q', 'N', 'R', 'B']) pseudo.push({ fr:r, fc:c, tr:nr, tc:c, promo:pr });
+          } else {
             pseudo.push({ fr:r, fc:c, tr:nr, tc:c });
             const nnr = r + dir * 2;
             if (r === startR && !b[nnr][c]) pseudo.push({ fr:r, fc:c, tr:nnr, tc:c });
@@ -670,8 +671,9 @@ function getLegalMoves(s, color = s.turn) {
           if (!inBounds(nr, nc)) continue;
           const target = b[nr][nc];
           if (target && target.color === opp && target.type !== 'K') {
-            if (nr === promoR) pseudo.push({ fr:r, fc:c, tr:nr, tc:nc, promo:'Q' });
-            else pseudo.push({ fr:r, fc:c, tr:nr, tc:nc });
+            if (nr === promoR) {
+              for (const pr of ['Q', 'N', 'R', 'B']) pseudo.push({ fr:r, fc:c, tr:nr, tc:nc, promo:pr });
+            } else pseudo.push({ fr:r, fc:c, tr:nr, tc:nc });
           } else if (s.ep && s.ep.r === nr && s.ep.c === nc) {
             pseudo.push({ fr:r, fc:c, tr:nr, tc:nc, epCapture:true });
           }
@@ -898,8 +900,15 @@ function syncBoardVisuals() {
 }
 
 // ===== 自定义局面编辑逻辑 =====
+function cancelNativeEngine() {
+  if (window.AndroidBridge && window.AndroidBridge.cancelEngine) {
+    window.AndroidBridge.cancelEngine();
+  }
+}
+
 function enterCustomEdit() {
   if (searchWatchdog) clearTimeout(searchWatchdog);
+  cancelNativeEngine();
   isThinking = false;
   currentSearchToken++;
 
@@ -1196,13 +1205,35 @@ async function fetchCloudBestMove(fen, legalMoves) {
   return null;
 }
 
+function moveToUciStr(m) {
+  return rcToAlg(m.fr, m.fc) + rcToAlg(m.tr, m.tc) + (m.promo ? m.promo.toLowerCase() : '');
+}
+
 function matchUci(uci, legalMoves) {
   if (!uci || uci.length < 4) return null;
-  const fc = FILES.indexOf(uci[0]);
-  const fr = 8 - parseInt(uci[1], 10);
-  const tc = FILES.indexOf(uci[2]);
-  const tr = 8 - parseInt(uci[3], 10);
+  const low = uci.trim().toLowerCase();
+  const fc = FILES.indexOf(low[0]);
+  const fr = 8 - parseInt(low[1], 10);
+  const tc = FILES.indexOf(low[2]);
+  const tr = 8 - parseInt(low[3], 10);
+  const pr = low.length >= 5 ? low[4].toUpperCase() : null;
+  if (pr) {
+    const exact = legalMoves.find(m => m.fr === fr && m.fc === fc && m.tr === tr && m.tc === tc && m.promo === pr);
+    if (exact) return exact;
+  }
   return legalMoves.find(m => m.fr === fr && m.fc === fc && m.tr === tr && m.tc === tc) || null;
+}
+
+function onNativeEngineResult(token, uci, sourceTag) {
+  if (!isThinking || token !== currentSearchToken) return;
+  const legals = getLegalMoves(state, aiColor);
+  const found = matchUci(uci, legals);
+  if (found) {
+    commitAiMove(found, sourceTag || '超算');
+  } else {
+    const localMv = localBestMove(state, 3);
+    commitAiMove(localMv, '应急引擎');
+  }
 }
 
 async function triggerAiResponse() {
@@ -1214,29 +1245,46 @@ async function triggerAiResponse() {
 
   isThinking = true;
   const myToken = ++currentSearchToken;
-  notifyNative('计算中', '...', false);
+  notifyNative('超算中', '...', false);
 
+  const fen = toFEN(state);
+
+  // 优先走原生安卓多线程超算管理器（绕过 WebView file:// CORS 拦截 + 四云端并行 + ARM64 本地强引擎保底）
+  if (window.AndroidBridge && window.AndroidBridge.requestBestMove) {
+    if (searchWatchdog) clearTimeout(searchWatchdog);
+    searchWatchdog = setTimeout(() => {
+      if (isThinking && myToken === currentSearchToken) {
+        const fallback = localBestMove(state, 3);
+        commitAiMove(fallback, '应急引擎');
+      }
+    }, 6800);
+
+    const legalCsv = legals.map(moveToUciStr).join(',');
+    window.AndroidBridge.requestBestMove(fen, myToken, legalCsv);
+    return;
+  }
+
+  // 非 APK 浏览器预览环境兼容分支
   if (searchWatchdog) clearTimeout(searchWatchdog);
   searchWatchdog = setTimeout(() => {
     if (isThinking && myToken === currentSearchToken) {
-      const fallback = localBestMove(state, 4);
-      commitAiMove(fallback);
+      const fallback = localBestMove(state, 3);
+      commitAiMove(fallback, '本地引擎');
     }
-  }, 2400);
+  }, 3200);
 
-  const fen = toFEN(state);
   const cloudRes = await fetchCloudBestMove(fen, legals);
   if (!isThinking || myToken !== currentSearchToken) return;
 
   if (cloudRes && cloudRes.move) {
-    commitAiMove(cloudRes.move);
+    commitAiMove(cloudRes.move, '云端超算');
   } else {
-    const localMv = localBestMove(state, 4);
-    commitAiMove(localMv);
+    const localMv = localBestMove(state, 3);
+    commitAiMove(localMv, '本地引擎');
   }
 }
 
-function commitAiMove(mv) {
+function commitAiMove(mv, sourceTag) {
   if (searchWatchdog) clearTimeout(searchWatchdog);
   isThinking = false;
   if (!mv) return;
@@ -1248,12 +1296,14 @@ function commitAiMove(mv) {
   spawnCellRipple(mv.tr, mv.tc);
   syncBoardVisuals();
 
-  notifyNative('请走棋', `${fromAlg} → ${toAlg}`, true);
+  const label = sourceTag ? `${sourceTag}` : '请走棋';
+  notifyNative(label, `${fromAlg} → ${toAlg}`, true);
 }
 
 function undoTurn() {
   if (!historyStack.length) return;
   if (searchWatchdog) clearTimeout(searchWatchdog);
+  cancelNativeEngine();
   isThinking = false;
   const prev = historyStack.pop();
   state = prev.state;
@@ -1274,6 +1324,7 @@ function openPicker() {
 
 function startNewGame(color) {
   if (searchWatchdog) clearTimeout(searchWatchdog);
+  cancelNativeEngine();
   isThinking = false;
   aiColor = color;
   oppColor = color === 'w' ? 'b' : 'w';
