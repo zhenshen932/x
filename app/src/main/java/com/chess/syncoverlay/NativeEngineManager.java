@@ -21,8 +21,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Multi-tier native chess super-engine coordinator.
- * Runs native Java HTTP requests (completely bypassing WebView file:// CORS limits)
- * to 4 real 3300+ ELO cloud engines in parallel, backed by LocalChessEngine (ARM64 native).
+ * Supports normal deep mode and semi-auto fastMode (target ~1s, hard ceiling <= 1.5s).
  */
 public class NativeEngineManager {
     public interface Callback {
@@ -32,7 +31,7 @@ public class NativeEngineManager {
     private static class CloudCandidate {
         final String uci;
         final String tag;
-        final int priority; // higher = better
+        final int priority;
 
         CloudCandidate(String uci, String tag, int priority) {
             this.uci = uci;
@@ -58,7 +57,13 @@ public class NativeEngineManager {
         localPool.shutdownNow();
     }
 
-    public void requestBestMove(final String fen, final int token, final String legalMovesCsv, final Callback callback) {
+    public void requestBestMove(
+            final String fen,
+            final int token,
+            final String legalMovesCsv,
+            final boolean fastMode,
+            final Callback callback
+    ) {
         latestToken.set(token);
         activeLocalStop.set(true);
         final AtomicBoolean myStop = new AtomicBoolean(false);
@@ -73,43 +78,49 @@ public class NativeEngineManager {
             }
         }
 
-        // Launch offline ARM64 native engine immediately in parallel as guaranteed strong backup
+        // 半自动极速模式：本地引擎并行限幅 920ms；普通模式 2200ms
+        final long localBudgetMs = fastMode ? 920L : 2200L;
         final Future<LocalChessEngine.SearchResult> localFuture = localPool.submit(() ->
-                localEngine.findBestMove(fen, 2200L, myStop)
+                localEngine.findBestMove(fen, localBudgetMs, myStop)
         );
 
         coordinatorPool.execute(() -> {
+            final long startMs = System.currentTimeMillis();
             final Object lock = new Object();
             final CloudCandidate[] bestCloud = new CloudCandidate[1];
             final AtomicInteger finishedCloudCount = new AtomicInteger(0);
             final int totalClouds = 4;
 
-            // 1. ChessDB.cn (China-hosted 3500+ ELO opening book & 7-piece tablebase)
+            final int connectMs = fastMode ? 750 : 2000;
+            final int readMs = fastMode ? 1050 : 2600;
+
+            // 1. ChessDB.cn (国内超算开局与残局库)
             coordinatorPool.execute(() -> {
-                CloudCandidate res = queryChessDb(fen, legalSet);
+                CloudCandidate res = queryChessDb(fen, legalSet, connectMs, readMs);
                 submitCandidate(lock, bestCloud, finishedCloudCount, res);
             });
 
-            // 2. Chess-API.com (Real Stockfish 17 NNUE Depth 18)
+            // 2. Chess-API.com (Stockfish 17 NNUE)
             coordinatorPool.execute(() -> {
-                CloudCandidate res = queryChessApiSf17(fen, legalSet);
+                CloudCandidate res = queryChessApiSf17(fen, legalSet, fastMode, connectMs, readMs);
                 submitCandidate(lock, bestCloud, finishedCloudCount, res);
             });
 
-            // 3. Stockfish.online (Real Stockfish 16/17 Depth 15)
+            // 3. Stockfish.online
             coordinatorPool.execute(() -> {
-                CloudCandidate res = queryStockfishOnline(fen, legalSet);
+                CloudCandidate res = queryStockfishOnline(fen, legalSet, fastMode, connectMs, readMs);
                 submitCandidate(lock, bestCloud, finishedCloudCount, res);
             });
 
-            // 4. Lichess Cloud Eval (40-ply Stockfish cloud cache)
+            // 4. Lichess Cloud Eval
             coordinatorPool.execute(() -> {
-                CloudCandidate res = queryLichessCloud(fen, legalSet);
+                CloudCandidate res = queryLichessCloud(fen, legalSet, connectMs, readMs);
                 submitCandidate(lock, bestCloud, finishedCloudCount, res);
             });
 
-            long startMs = System.currentTimeMillis();
-            long maxCloudWaitMs = 3600L;
+            // 半自动模式严格把云端等待压在 1050ms 内，给本地结果汇总留出充足余量，确保总耗时 <= 1.45s
+            final long maxCloudWaitMs = fastMode ? 1050L : 3600L;
+            final long goodEnoughWaitMs = fastMode ? 420L : 700L;
             CloudCandidate chosen = null;
 
             synchronized (lock) {
@@ -123,8 +134,7 @@ public class NativeEngineManager {
                         break;
                     }
                     long elapsed = System.currentTimeMillis() - startMs;
-                    // If we have a solid cloud candidate (e.g. SF15 or ChessDB rank 1), wait at most 450ms for SF17
-                    if (bestCloud[0] != null && (elapsed >= 700L || finishedCloudCount.get() >= totalClouds)) {
+                    if (bestCloud[0] != null && (elapsed >= goodEnoughWaitMs || finishedCloudCount.get() >= totalClouds)) {
                         chosen = bestCloud[0];
                         break;
                     }
@@ -132,7 +142,7 @@ public class NativeEngineManager {
                         chosen = bestCloud[0];
                         break;
                     }
-                    long waitMs = Math.min(200L, maxCloudWaitMs - elapsed);
+                    long waitMs = Math.min(120L, maxCloudWaitMs - elapsed);
                     if (waitMs <= 0) break;
                     try {
                         lock.wait(waitMs);
@@ -153,17 +163,24 @@ public class NativeEngineManager {
                 return;
             }
 
-            // All cloud engines unreachable/timed out -> use our high-strength ARM64 native engine
+            // 所有云端均未在时限内返回 -> 立即取回并行计算的本地强引擎结果（严格限制总耗时不超过 1.45s）
+            long remainingMs = fastMode
+                    ? Math.max(80L, 1400L - (System.currentTimeMillis() - startMs))
+                    : 2600L;
             try {
-                LocalChessEngine.SearchResult localRes = localFuture.get(2600L, TimeUnit.MILLISECONDS);
+                if (fastMode && remainingMs <= 120L) {
+                    myStop.set(true);
+                }
+                LocalChessEngine.SearchResult localRes = localFuture.get(remainingMs, TimeUnit.MILLISECONDS);
                 if (latestToken.get() != token) return;
                 if (localRes != null && isLegalUci(localRes.uci, legalSet)) {
                     callback.onBestMove(token, localRes.uci, "本地" + localRes.depth + "层");
                     return;
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+                myStop.set(true);
+            }
 
-            // Final fallback: signal empty so JS takes immediate legal fallback if needed
             if (latestToken.get() == token) {
                 callback.onBestMove(token, "", "本地引擎");
             }
@@ -187,7 +204,6 @@ public class NativeEngineManager {
         if (legalSet.isEmpty()) return true;
         String low = uci.trim().toLowerCase();
         if (legalSet.contains(low)) return true;
-        // Also allow matching 4-char base when promotion defaults to queen
         if (low.length() >= 4 && legalSet.contains(low.substring(0, 4))) return true;
         return false;
     }
@@ -204,16 +220,16 @@ public class NativeEngineManager {
         return sb.toString();
     }
 
-    private CloudCandidate queryChessDb(String fen, Set<String> legalSet) {
+    private CloudCandidate queryChessDb(String fen, Set<String> legalSet, int connectMs, int readMs) {
         HttpURLConnection conn = null;
         try {
             String urlStr = "https://www.chessdb.cn/cdb.php?action=queryall&board="
                     + URLEncoder.encode(fen, "UTF-8") + "&json=1";
             conn = (HttpURLConnection) new URL(urlStr).openConnection();
             conn.setRequestMethod("GET");
-            conn.setConnectTimeout(2000);
-            conn.setReadTimeout(2200);
-            conn.setRequestProperty("User-Agent", "ChessSyncOverlay/8.0");
+            conn.setConnectTimeout(connectMs);
+            conn.setReadTimeout(readMs);
+            conn.setRequestProperty("User-Agent", "ChessSyncOverlay/9.0");
             if (conn.getResponseCode() == 200) {
                 String body = readStream(conn.getInputStream());
                 JSONObject json = new JSONObject(body);
@@ -237,21 +253,21 @@ public class NativeEngineManager {
         return null;
     }
 
-    private CloudCandidate queryChessApiSf17(String fen, Set<String> legalSet) {
+    private CloudCandidate queryChessApiSf17(String fen, Set<String> legalSet, boolean fastMode, int connectMs, int readMs) {
         HttpURLConnection conn = null;
         try {
             conn = (HttpURLConnection) new URL("https://chess-api.com/v1").openConnection();
             conn.setRequestMethod("POST");
-            conn.setConnectTimeout(2200);
-            conn.setReadTimeout(3200);
+            conn.setConnectTimeout(connectMs);
+            conn.setReadTimeout(readMs);
             conn.setDoOutput(true);
             conn.setRequestProperty("Content-Type", "application/json");
-            conn.setRequestProperty("User-Agent", "ChessSyncOverlay/8.0");
+            conn.setRequestProperty("User-Agent", "ChessSyncOverlay/9.0");
 
             JSONObject payload = new JSONObject();
             payload.put("fen", fen);
-            payload.put("depth", 18);
-            payload.put("maxThinkingTime", 100);
+            payload.put("depth", fastMode ? 14 : 18);
+            payload.put("maxThinkingTime", fastMode ? 45 : 100);
             byte[] outBytes = payload.toString().getBytes(StandardCharsets.UTF_8);
             try (OutputStream os = conn.getOutputStream()) {
                 os.write(outBytes);
@@ -261,7 +277,7 @@ public class NativeEngineManager {
                 String body = readStream(conn.getInputStream());
                 JSONObject json = new JSONObject(body);
                 String uci = json.optString("move", "").trim().toLowerCase();
-                int depth = json.optInt("depth", 18);
+                int depth = json.optInt("depth", fastMode ? 14 : 18);
                 if (isLegalUci(uci, legalSet)) {
                     return new CloudCandidate(uci, "SF17·" + depth + "层", 110);
                 }
@@ -273,16 +289,17 @@ public class NativeEngineManager {
         return null;
     }
 
-    private CloudCandidate queryStockfishOnline(String fen, Set<String> legalSet) {
+    private CloudCandidate queryStockfishOnline(String fen, Set<String> legalSet, boolean fastMode, int connectMs, int readMs) {
         HttpURLConnection conn = null;
         try {
+            int reqDepth = fastMode ? 13 : 15;
             String urlStr = "https://stockfish.online/api/s/v2.php?fen="
-                    + URLEncoder.encode(fen, "UTF-8") + "&depth=15";
+                    + URLEncoder.encode(fen, "UTF-8") + "&depth=" + reqDepth;
             conn = (HttpURLConnection) new URL(urlStr).openConnection();
             conn.setRequestMethod("GET");
-            conn.setConnectTimeout(2200);
-            conn.setReadTimeout(3200);
-            conn.setRequestProperty("User-Agent", "ChessSyncOverlay/8.0");
+            conn.setConnectTimeout(connectMs);
+            conn.setReadTimeout(readMs);
+            conn.setRequestProperty("User-Agent", "ChessSyncOverlay/9.0");
 
             if (conn.getResponseCode() == 200) {
                 String body = readStream(conn.getInputStream());
@@ -293,7 +310,7 @@ public class NativeEngineManager {
                     String uci = (toks.length >= 2 && "bestmove".equals(toks[0])) ? toks[1] : toks[0];
                     uci = uci.trim().toLowerCase();
                     if (isLegalUci(uci, legalSet)) {
-                        return new CloudCandidate(uci, "SF·15层", 95);
+                        return new CloudCandidate(uci, "SF·" + reqDepth + "层", 95);
                     }
                 }
             }
@@ -304,16 +321,16 @@ public class NativeEngineManager {
         return null;
     }
 
-    private CloudCandidate queryLichessCloud(String fen, Set<String> legalSet) {
+    private CloudCandidate queryLichessCloud(String fen, Set<String> legalSet, int connectMs, int readMs) {
         HttpURLConnection conn = null;
         try {
             String urlStr = "https://lichess.org/api/cloud-eval?fen="
                     + URLEncoder.encode(fen, "UTF-8") + "&multiPv=1";
             conn = (HttpURLConnection) new URL(urlStr).openConnection();
             conn.setRequestMethod("GET");
-            conn.setConnectTimeout(2000);
-            conn.setReadTimeout(2400);
-            conn.setRequestProperty("User-Agent", "ChessSyncOverlay/8.0");
+            conn.setConnectTimeout(connectMs);
+            conn.setReadTimeout(readMs);
+            conn.setRequestProperty("User-Agent", "ChessSyncOverlay/9.0");
 
             if (conn.getResponseCode() == 200) {
                 String body = readStream(conn.getInputStream());

@@ -475,8 +475,13 @@ let legalTargets = [];
 let lastAiMove = null;
 let lastOppMove = null;
 let isThinking = false;
+let isSemiAuto = false;
 let searchWatchdog = null;
 let currentSearchToken = 0;
+
+function setSemiAutoMode(enabled) {
+  isSemiAuto = !!enabled;
+}
 
 // 自定义局面编辑状态
 let isCustomEditing = false;
@@ -1252,15 +1257,17 @@ async function triggerAiResponse() {
   // 优先走原生安卓多线程超算管理器（绕过 WebView file:// CORS 拦截 + 四云端并行 + ARM64 本地强引擎保底）
   if (window.AndroidBridge && window.AndroidBridge.requestBestMove) {
     if (searchWatchdog) clearTimeout(searchWatchdog);
+    const hardLimitMs = isSemiAuto ? 1520 : 6800;
     searchWatchdog = setTimeout(() => {
       if (isThinking && myToken === currentSearchToken) {
-        const fallback = localBestMove(state, 3);
-        commitAiMove(fallback, '应急引擎');
+        cancelNativeEngine();
+        const fallback = localBestMove(state, isSemiAuto ? 2 : 3);
+        commitAiMove(fallback, '极速本地');
       }
-    }, 6800);
+    }, hardLimitMs);
 
     const legalCsv = legals.map(moveToUciStr).join(',');
-    window.AndroidBridge.requestBestMove(fen, myToken, legalCsv);
+    window.AndroidBridge.requestBestMove(fen, myToken, legalCsv, isSemiAuto);
     return;
   }
 
@@ -1291,13 +1298,27 @@ function commitAiMove(mv, sourceTag) {
 
   const fromAlg = rcToAlg(mv.fr, mv.fc);
   const toAlg = rcToAlg(mv.tr, mv.tc);
+  const fromScreen = toScreenRC(mv.fr, mv.fc);
+  const toScreen = toScreenRC(mv.tr, mv.tc);
+
   state = applyMove(state, mv);
   lastAiMove = mv;
   spawnCellRipple(mv.tr, mv.tc);
   syncBoardVisuals();
 
   const label = sourceTag ? `${sourceTag}` : '请走棋';
-  notifyNative(label, `${fromAlg} → ${toAlg}`, true);
+  if (isSemiAuto && window.AndroidBridge && window.AndroidBridge.onAiMoveForAutoTap) {
+    window.AndroidBridge.onAiMoveForAutoTap(
+      label,
+      `${fromAlg} → ${toAlg}`,
+      fromScreen.sr,
+      fromScreen.sc,
+      toScreen.sr,
+      toScreen.sc
+    );
+  } else {
+    notifyNative(label, `${fromAlg} → ${toAlg}`, true);
+  }
 }
 
 function undoTurn() {

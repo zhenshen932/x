@@ -45,7 +45,10 @@ import java.util.UUID;
 
 public class OverlayService extends Service {
     public static boolean isRunning = false;
+    public static boolean isSemiAutoMode = false;
     public static final String ACTION_APPLY_PRESET = "com.chess.syncoverlay.APPLY_PRESET";
+    public static final String ACTION_START_NORMAL = "com.chess.syncoverlay.START_NORMAL";
+    public static final String ACTION_START_SEMI_AUTO = "com.chess.syncoverlay.START_SEMI_AUTO";
 
     private WindowManager wm;
     private FrameLayout controlShell;
@@ -98,6 +101,7 @@ public class OverlayService extends Service {
     private TextView tvPieceAlphaVal;
 
     private boolean isPassThrough = false;
+    private boolean isAutoTapping = false;
     private boolean isSlidersOpen = false;
     private boolean isSaveOpen = false;
     private boolean isMinimized = false;
@@ -262,10 +266,35 @@ public class OverlayService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if (intent != null && ACTION_APPLY_PRESET.equals(intent.getAction())) {
-            applyPresetFromStore();
+        if (intent != null) {
+            String act = intent.getAction();
+            if (ACTION_APPLY_PRESET.equals(act)) {
+                applyPresetFromStore();
+            } else if (ACTION_START_SEMI_AUTO.equals(act)) {
+                setSemiAutoActive(true);
+            } else if (ACTION_START_NORMAL.equals(act)) {
+                setSemiAutoActive(false);
+            }
         }
         return START_STICKY;
+    }
+
+    private void setSemiAutoActive(boolean enabled) {
+        isSemiAutoMode = enabled;
+        isAutoTapping = false;
+        if (webView != null) {
+            webView.evaluateJavascript("setSemiAutoMode(" + enabled + ")", null);
+        }
+        if (btnToggleMode != null && !isPassThrough) {
+            if (enabled) {
+                btnToggleMode.setText("半自动");
+                btnToggleMode.setBackground(makeDarkBtnBg("#D909090B", "#996EE7B7", 8));
+            } else {
+                btnToggleMode.setText("录入中");
+                btnToggleMode.setBackground(makeDarkBtnBg("#D909090B", "#88FFFFFF", 8));
+            }
+        }
+        sendBroadcast(new Intent(MainActivity.ACTION_PRESET_CHANGED).setPackage(getPackageName()));
     }
 
     @Override
@@ -425,7 +454,7 @@ public class OverlayService extends Service {
         boardRoot.setBackgroundColor(Color.TRANSPARENT);
 
         boardRoot.setOnTouchListener((v, event) -> {
-            if (isPassThrough && event.getAction() == MotionEvent.ACTION_OUTSIDE) {
+            if (isPassThrough && !isAutoTapping && event.getAction() == MotionEvent.ACTION_OUTSIDE) {
                 long elapsed = SystemClock.uptimeMillis() - passThroughEnabledAtMs;
                 if (elapsed < 350L) {
                     return false;
@@ -450,6 +479,7 @@ public class OverlayService extends Service {
             @Override
             public void onPageFinished(WebView view, String url) {
                 syncOpacityToWeb();
+                webView.evaluateJavascript("setSemiAutoMode(" + isSemiAutoMode + ")", null);
             }
         });
         webView.loadUrl("file:///android_asset/index.html");
@@ -611,6 +641,7 @@ public class OverlayService extends Service {
                 Toast.makeText(this, "请先完成或取消自定义编辑", Toast.LENGTH_SHORT).show();
                 return;
             }
+            if (isAutoTapping) return;
             cancelAutoReturn();
             setBoardPassThrough(!isPassThrough);
         });
@@ -1360,8 +1391,13 @@ public class OverlayService extends Service {
             boardParams.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                     | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN;
             boardParams.alpha = 1.0f;
-            btnToggleMode.setText("录入中");
-            btnToggleMode.setBackground(makeDarkBtnBg("#D909090B", "#88FFFFFF", 8));
+            if (isSemiAutoMode) {
+                btnToggleMode.setText("半自动");
+                btnToggleMode.setBackground(makeDarkBtnBg("#D909090B", "#996EE7B7", 8));
+            } else {
+                btnToggleMode.setText("录入中");
+                btnToggleMode.setBackground(makeDarkBtnBg("#D909090B", "#88FFFFFF", 8));
+            }
             if (!isCustomEditing) {
                 tvStatus.setText("录入对手");
             }
@@ -1420,8 +1456,8 @@ public class OverlayService extends Service {
         }
 
         @JavascriptInterface
-        public void requestBestMove(final String fen, final int token, final String legalMovesCsv) {
-            engineManager.requestBestMove(fen, token, legalMovesCsv, (resToken, uci, sourceTag) -> {
+        public void requestBestMove(final String fen, final int token, final String legalMovesCsv, final boolean fastMode) {
+            engineManager.requestBestMove(fen, token, legalMovesCsv, fastMode, (resToken, uci, sourceTag) -> {
                 mainHandler.post(() -> {
                     if (webView == null) return;
                     String safeUci = (uci == null) ? "" : uci.replace("'", "");
@@ -1433,12 +1469,94 @@ public class OverlayService extends Service {
                 });
             });
         }
+
+        @JavascriptInterface
+        public void onAiMoveForAutoTap(
+                final String sourceTag,
+                final String moveText,
+                final int fromSr,
+                final int fromSc,
+                final int toSr,
+                final int toSc
+        ) {
+            mainHandler.post(() -> executeSemiAutoMoveTap(sourceTag, moveText, fromSr, fromSc, toSr, toSc));
+        }
+    }
+
+    private void executeSemiAutoMoveTap(
+            final String sourceTag,
+            final String moveText,
+            final int fromSr,
+            final int fromSc,
+            final int toSr,
+            final int toSc
+    ) {
+        cancelAutoReturn();
+        tvMove.setText("走法: " + moveText);
+
+        if (!ChessTapAccessibilityService.isServiceConnected()) {
+            Toast.makeText(this, "无障碍服务未连接，已切回手动穿透", Toast.LENGTH_SHORT).show();
+            setBoardPassThrough(true);
+            tvStatus.setText(sourceTag);
+            return;
+        }
+
+        // 1. 立即临时切为硬件级穿透（关闭外部触摸监听 + alpha 0.74f），确保模拟点击 100% 穿透到底层棋盘
+        isAutoTapping = true;
+        isPassThrough = true;
+        boardParams.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+        boardParams.alpha = 0.74f;
+        try {
+            wm.updateViewLayout(boardRoot, boardParams);
+        } catch (Exception ignored) {}
+        webView.evaluateJavascript("setVisualPassThrough(true)", null);
+        btnToggleMode.setText("落子中");
+        btnToggleMode.setBackground(makeEmeraldGradientBg(8, "#996EE7B7"));
+        tvStatus.setText(sourceTag + "·落子中");
+
+        // 2. 等待 80ms 让窗口合成器提交穿透标志，然后按真实屏幕坐标派发两次无障碍点击
+        mainHandler.postDelayed(() -> {
+            if (!isRunning || boardRoot == null) return;
+            int[] loc = new int[2];
+            boardRoot.getLocationOnScreen(loc);
+            float actualSize = boardRoot.getWidth() > 0 ? boardRoot.getWidth() : boardSizePx;
+            float cell = actualSize / 8.0f;
+
+            DisplayMetrics curDm = getResources().getDisplayMetrics();
+            int curW = Math.max(curDm.widthPixels, loc[0] + Math.round(actualSize));
+            int curH = Math.max(curDm.heightPixels, loc[1] + Math.round(actualSize));
+            float x1 = clampScreenCoord(loc[0] + (fromSc + 0.5f) * cell, curW);
+            float y1 = clampScreenCoord(loc[1] + (fromSr + 0.5f) * cell, curH);
+            float x2 = clampScreenCoord(loc[0] + (toSc + 0.5f) * cell, curW);
+            float y2 = clampScreenCoord(loc[1] + (toSr + 0.5f) * cell, curH);
+
+            boolean ok = ChessTapAccessibilityService.performMoveTaps(x1, y1, x2, y2, () -> {
+                isAutoTapping = false;
+                if (!isRunning) return;
+                setBoardPassThrough(false);
+                tvStatus.setText(sourceTag + "·已落子");
+            });
+
+            if (!ok) {
+                isAutoTapping = false;
+                setBoardPassThrough(true);
+                tvStatus.setText(sourceTag);
+            }
+        }, 80L);
+    }
+
+    private float clampScreenCoord(float val, int maxDim) {
+        return Math.max(1f, Math.min(maxDim - 1f, val));
     }
 
     @Override
     public void onDestroy() {
         super.onDestroy();
         isRunning = false;
+        isSemiAutoMode = false;
+        isAutoTapping = false;
         cancelAutoReturn();
         engineManager.shutdown();
         if (activeSnapAnimator != null) activeSnapAnimator.cancel();

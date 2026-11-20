@@ -16,6 +16,7 @@ import android.os.Bundle;
 import android.provider.Settings;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.Window;
@@ -35,6 +36,7 @@ public class MainActivity extends Activity {
 
     private LinearLayout presetListContainer;
     private TextView btnToggleOverlay;
+    private boolean pendingSemiAutoAfterPerm = false;
 
     private final BroadcastReceiver updateReceiver = new BroadcastReceiver() {
         @Override
@@ -115,7 +117,12 @@ public class MainActivity extends Activity {
         btnToggleOverlay.setTypeface(Typeface.DEFAULT_BOLD);
         btnToggleOverlay.setPadding(dp(16), dp(15), dp(16), dp(15));
         attachSpringPress(btnToggleOverlay);
-        btnToggleOverlay.setOnClickListener(v -> toggleOverlayService());
+        btnToggleOverlay.setOnClickListener(v -> toggleOverlayService(false));
+        btnToggleOverlay.setOnLongClickListener(v -> {
+            v.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+            launchSemiAutoMode();
+            return true;
+        });
 
         LinearLayout.LayoutParams lpLaunch = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -172,7 +179,7 @@ public class MainActivity extends Activity {
     private void refreshUi() {
         boolean running = OverlayService.isRunning;
         if (running) {
-            btnToggleOverlay.setText("关闭悬浮棋盘");
+            btnToggleOverlay.setText(OverlayService.isSemiAutoMode ? "关闭悬浮棋盘（半自动）" : "关闭悬浮棋盘");
             btnToggleOverlay.setTextColor(Color.WHITE);
             btnToggleOverlay.setBackground(makeBox("#18181B", "#FFFFFF", 14, 1.5f));
         } else {
@@ -367,21 +374,44 @@ public class MainActivity extends Activity {
         builder.show();
     }
 
-    private void toggleOverlayService() {
-        if (OverlayService.isRunning) {
+    private void toggleOverlayService(boolean semiAuto) {
+        if (OverlayService.isRunning && !semiAuto) {
             stopService(new Intent(this, OverlayService.class));
             btnToggleOverlay.postDelayed(this::refreshUi, 120);
             return;
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            pendingSemiAutoAfterPerm = semiAuto;
             Toast.makeText(this, "请授予悬浮窗权限", Toast.LENGTH_LONG).show();
             Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                     Uri.parse("package:" + getPackageName()));
             startActivityForResult(intent, REQ_OVERLAY);
-        } else {
-            startService(new Intent(this, OverlayService.class));
-            btnToggleOverlay.postDelayed(this::refreshUi, 120);
+            return;
         }
+        Intent it = new Intent(this, OverlayService.class);
+        it.setAction(semiAuto ? OverlayService.ACTION_START_SEMI_AUTO : OverlayService.ACTION_START_NORMAL);
+        startService(it);
+        btnToggleOverlay.postDelayed(this::refreshUi, 120);
+    }
+
+    private void launchSemiAutoMode() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            pendingSemiAutoAfterPerm = true;
+            Toast.makeText(this, "请先授予悬浮窗权限", Toast.LENGTH_LONG).show();
+            Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:" + getPackageName()));
+            startActivityForResult(intent, REQ_OVERLAY);
+            return;
+        }
+        if (!ChessTapAccessibilityService.isEnabledInSettings(this)) {
+            Toast.makeText(this, "请开启象棋同步推演自动落子无障碍服务", Toast.LENGTH_LONG).show();
+            try {
+                startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+            } catch (Exception ignored) {}
+            return;
+        }
+        toggleOverlayService(true);
+        Toast.makeText(this, "已进入半自动模式", Toast.LENGTH_SHORT).show();
     }
 
     @Override
@@ -389,7 +419,13 @@ public class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == REQ_OVERLAY) {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this)) {
-                startService(new Intent(this, OverlayService.class));
+                boolean wantSemi = pendingSemiAutoAfterPerm;
+                pendingSemiAutoAfterPerm = false;
+                if (wantSemi) {
+                    launchSemiAutoMode();
+                } else {
+                    toggleOverlayService(false);
+                }
                 refreshUi();
             }
         }

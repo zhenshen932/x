@@ -1,3 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">OmniMedia Hub</string>
+    <string name="accessibility_service_desc">仅用于在半自动模式下模拟点击棋盘完成落子，不读取屏幕内容</string>
 </resources>
