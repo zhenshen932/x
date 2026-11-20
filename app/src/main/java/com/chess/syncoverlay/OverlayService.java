@@ -1516,7 +1516,7 @@ public class OverlayService extends Service {
         btnToggleMode.setBackground(makeEmeraldGradientBg(8, "#996EE7B7"));
         tvStatus.setText(sourceTag + "·落子中");
 
-        // 2. 等待 80ms 让窗口合成器提交穿透标志，然后按真实屏幕坐标派发两次无障碍点击
+        // 2. 等待 35ms 让窗口合成器提交穿透标志，然后按真实屏幕坐标立即派发极速双连点
         mainHandler.postDelayed(() -> {
             if (!isRunning || boardRoot == null) return;
             int[] loc = new int[2];
@@ -1544,7 +1544,7 @@ public class OverlayService extends Service {
                 setBoardPassThrough(true);
                 tvStatus.setText(sourceTag);
             }
-        }, 80L);
+        }, 35L);
     }
 
     private float clampScreenCoord(float val, int maxDim) {

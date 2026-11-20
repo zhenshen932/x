@@ -108,11 +108,12 @@ public class ChessTapAccessibilityService extends AccessibilityService {
         };
 
         // 兜底保护：防止极少数系统手势回调丢失导致界面停在穿透态
-        mainHandler.postDelayed(safeFinish, 1200L);
+        mainHandler.postDelayed(safeFinish, 650L);
 
+        // 极速双连点：点击时长 18ms，起止格间隔 55ms，落子后 35ms 立即交还录入控制权
         dispatchSingleTap(x1, y1, () -> mainHandler.postDelayed(() ->
-                dispatchSingleTap(x2, y2, () -> mainHandler.postDelayed(safeFinish, 160L)),
-                170L
+                dispatchSingleTap(x2, y2, () -> mainHandler.postDelayed(safeFinish, 35L)),
+                55L
         ));
     }
 
@@ -127,7 +128,7 @@ public class ChessTapAccessibilityService extends AccessibilityService {
         path.moveTo(safeX, safeY);
 
         GestureDescription.StrokeDescription stroke =
-                new GestureDescription.StrokeDescription(path, 0L, 42L);
+                new GestureDescription.StrokeDescription(path, 0L, 18L);
         GestureDescription gesture = new GestureDescription.Builder()
                 .addStroke(stroke)
                 .build();

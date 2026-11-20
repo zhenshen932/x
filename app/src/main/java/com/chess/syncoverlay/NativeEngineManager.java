@@ -21,7 +21,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Multi-tier native chess super-engine coordinator.
- * Supports normal deep mode and semi-auto fastMode (target ~1s, hard ceiling <= 1.5s).
+ * Supports normal deep mode and semi-auto fastMode (target 0.3s-0.9s, hard ceiling <= 1.2s).
  */
 public class NativeEngineManager {
     public interface Callback {
@@ -78,8 +78,8 @@ public class NativeEngineManager {
             }
         }
 
-        // 半自动极速模式：本地引擎并行限幅 920ms；普通模式 2200ms
-        final long localBudgetMs = fastMode ? 920L : 2200L;
+        // 半自动极速模式：本地引擎并行限幅 760ms；普通模式 1800ms
+        final long localBudgetMs = fastMode ? 760L : 1800L;
         final Future<LocalChessEngine.SearchResult> localFuture = localPool.submit(() ->
                 localEngine.findBestMove(fen, localBudgetMs, myStop)
         );
@@ -91,8 +91,8 @@ public class NativeEngineManager {
             final AtomicInteger finishedCloudCount = new AtomicInteger(0);
             final int totalClouds = 4;
 
-            final int connectMs = fastMode ? 750 : 2000;
-            final int readMs = fastMode ? 1050 : 2600;
+            final int connectMs = fastMode ? 580 : 1800;
+            final int readMs = fastMode ? 820 : 2400;
 
             // 1. ChessDB.cn (国内超算开局与残局库)
             coordinatorPool.execute(() -> {
@@ -118,9 +118,10 @@ public class NativeEngineManager {
                 submitCandidate(lock, bestCloud, finishedCloudCount, res);
             });
 
-            // 半自动模式严格把云端等待压在 1050ms 内，给本地结果汇总留出充足余量，确保总耗时 <= 1.45s
-            final long maxCloudWaitMs = fastMode ? 1050L : 3600L;
-            final long goodEnoughWaitMs = fastMode ? 420L : 700L;
+            // 半自动模式把云端等待压在 820ms 内，命中高优云端立即秒出，确保全流程严格 <= 1.2s
+            final long maxCloudWaitMs = fastMode ? 820L : 2600L;
+            final long goodEnoughWaitMs = fastMode ? 140L : 420L;
+            final int instantAcceptPrio = fastMode ? 95 : 100;
             CloudCandidate chosen = null;
 
             synchronized (lock) {
@@ -129,7 +130,7 @@ public class NativeEngineManager {
                         myStop.set(true);
                         return;
                     }
-                    if (bestCloud[0] != null && bestCloud[0].priority >= 100) {
+                    if (bestCloud[0] != null && bestCloud[0].priority >= instantAcceptPrio) {
                         chosen = bestCloud[0];
                         break;
                     }
@@ -142,7 +143,7 @@ public class NativeEngineManager {
                         chosen = bestCloud[0];
                         break;
                     }
-                    long waitMs = Math.min(120L, maxCloudWaitMs - elapsed);
+                    long waitMs = Math.min(80L, maxCloudWaitMs - elapsed);
                     if (waitMs <= 0) break;
                     try {
                         lock.wait(waitMs);
@@ -163,12 +164,12 @@ public class NativeEngineManager {
                 return;
             }
 
-            // 所有云端均未在时限内返回 -> 立即取回并行计算的本地强引擎结果（严格限制总耗时不超过 1.45s）
+            // 所有云端均未在时限内返回 -> 立即取回并行计算的本地强引擎结果（总耗时严格压在 <= 1.15s）
             long remainingMs = fastMode
-                    ? Math.max(80L, 1400L - (System.currentTimeMillis() - startMs))
-                    : 2600L;
+                    ? Math.max(40L, 1100L - (System.currentTimeMillis() - startMs))
+                    : 2200L;
             try {
-                if (fastMode && remainingMs <= 120L) {
+                if (fastMode && remainingMs <= 90L) {
                     myStop.set(true);
                 }
                 LocalChessEngine.SearchResult localRes = localFuture.get(remainingMs, TimeUnit.MILLISECONDS);
@@ -229,7 +230,7 @@ public class NativeEngineManager {
             conn.setRequestMethod("GET");
             conn.setConnectTimeout(connectMs);
             conn.setReadTimeout(readMs);
-            conn.setRequestProperty("User-Agent", "ChessSyncOverlay/9.0");
+            conn.setRequestProperty("User-Agent", "ChessSyncOverlay/10.0");
             if (conn.getResponseCode() == 200) {
                 String body = readStream(conn.getInputStream());
                 JSONObject json = new JSONObject(body);
@@ -262,12 +263,12 @@ public class NativeEngineManager {
             conn.setReadTimeout(readMs);
             conn.setDoOutput(true);
             conn.setRequestProperty("Content-Type", "application/json");
-            conn.setRequestProperty("User-Agent", "ChessSyncOverlay/9.0");
+            conn.setRequestProperty("User-Agent", "ChessSyncOverlay/10.0");
 
             JSONObject payload = new JSONObject();
             payload.put("fen", fen);
-            payload.put("depth", fastMode ? 14 : 18);
-            payload.put("maxThinkingTime", fastMode ? 45 : 100);
+            payload.put("depth", fastMode ? 12 : 18);
+            payload.put("maxThinkingTime", fastMode ? 28 : 100);
             byte[] outBytes = payload.toString().getBytes(StandardCharsets.UTF_8);
             try (OutputStream os = conn.getOutputStream()) {
                 os.write(outBytes);
@@ -292,14 +293,14 @@ public class NativeEngineManager {
     private CloudCandidate queryStockfishOnline(String fen, Set<String> legalSet, boolean fastMode, int connectMs, int readMs) {
         HttpURLConnection conn = null;
         try {
-            int reqDepth = fastMode ? 13 : 15;
+            int reqDepth = fastMode ? 12 : 15;
             String urlStr = "https://stockfish.online/api/s/v2.php?fen="
                     + URLEncoder.encode(fen, "UTF-8") + "&depth=" + reqDepth;
             conn = (HttpURLConnection) new URL(urlStr).openConnection();
             conn.setRequestMethod("GET");
             conn.setConnectTimeout(connectMs);
             conn.setReadTimeout(readMs);
-            conn.setRequestProperty("User-Agent", "ChessSyncOverlay/9.0");
+            conn.setRequestProperty("User-Agent", "ChessSyncOverlay/10.0");
 
             if (conn.getResponseCode() == 200) {
                 String body = readStream(conn.getInputStream());
@@ -330,7 +331,7 @@ public class NativeEngineManager {
             conn.setRequestMethod("GET");
             conn.setConnectTimeout(connectMs);
             conn.setReadTimeout(readMs);
-            conn.setRequestProperty("User-Agent", "ChessSyncOverlay/9.0");
+            conn.setRequestProperty("User-Agent", "ChessSyncOverlay/10.0");
 
             if (conn.getResponseCode() == 200) {
                 String body = readStream(conn.getInputStream());
