@@ -23,6 +23,7 @@ import android.os.SystemClock;
 import android.util.DisplayMetrics;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.VelocityTracker;
 import android.view.View;
@@ -96,15 +97,18 @@ public class OverlayService extends Service {
     private SeekBar sbSize;
     private SeekBar sbBoardAlpha;
     private SeekBar sbPieceAlpha;
+    private SeekBar sbTapGap;
     private TextView tvSizeVal;
     private TextView tvBoardAlphaVal;
     private TextView tvPieceAlphaVal;
+    private TextView tvTapGapVal;
 
     private boolean isPassThrough = false;
     private boolean isAutoTapping = false;
     private boolean isSlidersOpen = false;
     private boolean isSaveOpen = false;
     private boolean isMinimized = false;
+    private boolean isBoardHiddenInCircle = false;
     private boolean isMorphing = false;
 
     private long passThroughEnabledAtMs = 0L;
@@ -116,6 +120,7 @@ public class OverlayService extends Service {
     private int boardSizePx;
     private int boardAlphaPercent = 42;
     private int pieceAlphaPercent = 92;
+    private int tapGapMs = 105;
     private int circleSizePx;
 
     private int expandedCtrlX;
@@ -312,6 +317,7 @@ public class OverlayService extends Service {
         boardSizePx = Math.max(minBoardPx, Math.min(screenWidthPx, active.size));
         boardAlphaPercent = active.boardAlpha;
         pieceAlphaPercent = active.pieceAlpha;
+        tapGapMs = Math.max(60, Math.min(220, active.tapGapMs));
 
         int overlayType = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
                 ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -633,7 +639,15 @@ public class OverlayService extends Service {
             if (isCustomEditing) {
                 exitCustomEditMode(true);
             }
-            collapseToCircle();
+            collapseToCircle(false);
+        });
+        btnMinimize.setOnLongClickListener(v -> {
+            v.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+            if (isCustomEditing) {
+                exitCustomEditMode(true);
+            }
+            collapseToCircle(true);
+            return true;
         });
 
         btnToggleMode.setOnClickListener(v -> {
@@ -973,9 +987,10 @@ public class OverlayService extends Service {
         activeSnapAnimator.start();
     }
 
-    private void collapseToCircle() {
+    private void collapseToCircle(final boolean hideBoardToo) {
         if (isMinimized || isMorphing) return;
         isMorphing = true;
+        isBoardHiddenInCircle = hideBoardToo;
 
         if (isSlidersOpen) {
             isSlidersOpen = false;
@@ -1006,6 +1021,34 @@ public class OverlayService extends Service {
 
         final float startRadius = dp(12);
         final float endRadius = circleSizePx / 2f;
+
+        if (hideBoardToo && boardRoot != null && webView != null) {
+            cancelAutoReturn();
+            // 立即让棋盘底层放弃触摸拦截，防止收拢瞬间阻挡屏幕操作
+            boardParams.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                    | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                    | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+            try {
+                wm.updateViewLayout(boardRoot, boardParams);
+            } catch (Exception ignored) {}
+
+            float pivotX = Math.max(0f, Math.min(boardSizePx, (endX + endW / 2f) - boardParams.x));
+            webView.animate().cancel();
+            webView.setPivotX(pivotX);
+            webView.setPivotY(0f);
+            webView.animate()
+                    .scaleX(0.14f)
+                    .scaleY(0.14f)
+                    .alpha(0f)
+                    .setDuration(260)
+                    .setInterpolator(new PathInterpolator(0.32f, 0.72f, 0f, 1f))
+                    .withEndAction(() -> {
+                        if (isBoardHiddenInCircle && boardRoot != null) {
+                            boardRoot.setVisibility(View.GONE);
+                        }
+                    })
+                    .start();
+        }
 
         controlBarContent.animate()
                 .alpha(0f)
@@ -1083,6 +1126,28 @@ public class OverlayService extends Service {
 
         final float startRadius = circleSizePx / 2f;
         final float endRadius = dp(12);
+
+        if (isBoardHiddenInCircle && boardRoot != null && webView != null) {
+            isBoardHiddenInCircle = false;
+            webView.animate().cancel();
+            boardRoot.setVisibility(View.VISIBLE);
+            setBoardPassThrough(isPassThrough);
+
+            float pivotX = Math.max(0f, Math.min(boardSizePx, (startX + startW / 2f) - boardParams.x));
+            webView.setPivotX(pivotX);
+            webView.setPivotY(0f);
+            webView.setScaleX(0.16f);
+            webView.setScaleY(0.16f);
+            webView.setAlpha(0f);
+            webView.animate()
+                    .scaleX(1f)
+                    .scaleY(1f)
+                    .alpha(1f)
+                    .setStartDelay(45)
+                    .setDuration(330)
+                    .setInterpolator(new PathInterpolator(0.20f, 0.96f, 0.32f, 1.03f))
+                    .start();
+        }
 
         rookCircleView.animate()
                 .alpha(0f)
@@ -1195,12 +1260,29 @@ public class OverlayService extends Service {
             @Override public void onStopTrackingTouch(SeekBar seekBar) {}
         });
 
+        LinearLayout rGap = makeSliderRow("连点间隔", tapGapMs + "ms");
+        tvTapGapVal = (TextView) rGap.getChildAt(1);
+        sbTapGap = new SeekBar(this);
+        sbTapGap.setMax(160); // 60ms .. 220ms
+        sbTapGap.setProgress(Math.max(0, Math.min(160, tapGapMs - 60)));
+        sbTapGap.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                tapGapMs = 60 + progress;
+                tvTapGapVal.setText(tapGapMs + "ms");
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+            @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+        });
+
         slidersPanel.addView(rSize);
         slidersPanel.addView(sbSize);
         slidersPanel.addView(rBg);
         slidersPanel.addView(sbBoardAlpha);
         slidersPanel.addView(rPc);
         slidersPanel.addView(sbPieceAlpha);
+        slidersPanel.addView(rGap);
+        slidersPanel.addView(sbTapGap);
     }
 
     private LinearLayout makeSliderRow(String label, String valText) {
@@ -1260,6 +1342,7 @@ public class OverlayService extends Service {
             cur.size = boardSizePx;
             cur.boardAlpha = boardAlphaPercent;
             cur.pieceAlpha = pieceAlphaPercent;
+            cur.tapGapMs = tapGapMs;
             PresetStore.saveOrUpdate(this, cur);
             sendBroadcast(new Intent(MainActivity.ACTION_PRESET_CHANGED).setPackage(getPackageName()));
             Toast.makeText(this, "已保存: " + cur.name, Toast.LENGTH_SHORT).show();
@@ -1276,7 +1359,8 @@ public class OverlayService extends Service {
                     boardParams.y,
                     boardSizePx,
                     boardAlphaPercent,
-                    pieceAlphaPercent
+                    pieceAlphaPercent,
+                    tapGapMs
             );
             PresetStore.saveOrUpdate(this, created);
             sendBroadcast(new Intent(MainActivity.ACTION_PRESET_CHANGED).setPackage(getPackageName()));
@@ -1346,6 +1430,7 @@ public class OverlayService extends Service {
         boardSizePx = Math.max(minBoardPx, Math.min(screenWidthPx, p.size));
         boardAlphaPercent = p.boardAlpha;
         pieceAlphaPercent = p.pieceAlpha;
+        tapGapMs = Math.max(60, Math.min(220, p.tapGapMs));
 
         boardParams.x = p.x;
         boardParams.y = p.y;
@@ -1362,6 +1447,7 @@ public class OverlayService extends Service {
         if (sbSize != null) sbSize.setProgress(boardSizePx - minBoardPx);
         if (sbBoardAlpha != null) sbBoardAlpha.setProgress(boardAlphaPercent);
         if (sbPieceAlpha != null) sbPieceAlpha.setProgress(pieceAlphaPercent);
+        if (sbTapGap != null) sbTapGap.setProgress(Math.max(0, Math.min(160, tapGapMs - 60)));
 
         wm.updateViewLayout(boardRoot, boardParams);
         updateEditorDockPosition();
@@ -1456,8 +1542,8 @@ public class OverlayService extends Service {
         }
 
         @JavascriptInterface
-        public void requestBestMove(final String fen, final int token, final String legalMovesCsv, final boolean fastMode) {
-            engineManager.requestBestMove(fen, token, legalMovesCsv, fastMode, (resToken, uci, sourceTag) -> {
+        public void requestBestMove(final String fen, final int token, final String legalMovesCsv, final boolean fastMode, final String recentFensPipe) {
+            engineManager.requestBestMove(fen, token, legalMovesCsv, fastMode, recentFensPipe, (resToken, uci, sourceTag) -> {
                 mainHandler.post(() -> {
                     if (webView == null) return;
                     String safeUci = (uci == null) ? "" : uci.replace("'", "");
@@ -1514,11 +1600,14 @@ public class OverlayService extends Service {
         webView.evaluateJavascript("setVisualPassThrough(true)", null);
         btnToggleMode.setText("落子中");
         btnToggleMode.setBackground(makeEmeraldGradientBg(8, "#996EE7B7"));
-        tvStatus.setText(sourceTag + "·落子中");
+        tvStatus.setText(sourceTag + "·落子");
 
-        // 2. 等待 35ms 让窗口合成器提交穿透标志，然后按真实屏幕坐标立即派发极速双连点
+        // 2. 等待 75ms 确保底层 InputDispatcher 已生效穿透标志，随后按实时屏幕坐标稳定派发双连点
         mainHandler.postDelayed(() -> {
-            if (!isRunning || boardRoot == null) return;
+            if (!isRunning || boardRoot == null || isBoardHiddenInCircle) {
+                isAutoTapping = false;
+                return;
+            }
             int[] loc = new int[2];
             boardRoot.getLocationOnScreen(loc);
             float actualSize = boardRoot.getWidth() > 0 ? boardRoot.getWidth() : boardSizePx;
@@ -1532,11 +1621,11 @@ public class OverlayService extends Service {
             float x2 = clampScreenCoord(loc[0] + (toSc + 0.5f) * cell, curW);
             float y2 = clampScreenCoord(loc[1] + (toSr + 0.5f) * cell, curH);
 
-            boolean ok = ChessTapAccessibilityService.performMoveTaps(x1, y1, x2, y2, () -> {
+            boolean ok = ChessTapAccessibilityService.performMoveTaps(x1, y1, x2, y2, tapGapMs, () -> {
                 isAutoTapping = false;
-                if (!isRunning) return;
+                if (!isRunning || isBoardHiddenInCircle) return;
                 setBoardPassThrough(false);
-                tvStatus.setText(sourceTag + "·已落子");
+                tvStatus.setText(sourceTag + "·已下");
             });
 
             if (!ok) {
@@ -1544,7 +1633,7 @@ public class OverlayService extends Service {
                 setBoardPassThrough(true);
                 tvStatus.setText(sourceTag);
             }
-        }, 35L);
+        }, 75L);
     }
 
     private float clampScreenCoord(float val, int maxDim) {

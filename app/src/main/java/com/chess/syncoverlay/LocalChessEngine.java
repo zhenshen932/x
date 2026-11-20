@@ -252,7 +252,22 @@ public class LocalChessEngine {
     private long deadlineMs;
     private long nodes;
     private boolean timeUp;
+    private boolean minDepthDone;
     private AtomicBoolean externalStop;
+    private final long[] gameHistoryHashes = new long[128];
+    private int gameHistoryCount = 0;
+
+    public void setGameHistoryFens(String[] fens) {
+        gameHistoryCount = 0;
+        if (fens == null) return;
+        for (String f : fens) {
+            if (f == null || f.trim().isEmpty()) continue;
+            if (gameHistoryCount >= gameHistoryHashes.length) break;
+            if (loadFen(f)) {
+                gameHistoryHashes[gameHistoryCount++] = hash;
+            }
+        }
+    }
 
     private static int packMove(int from, int to, int promo, int flag) {
         return from | (to << 6) | (promo << 12) | (flag << 15);
@@ -787,7 +802,7 @@ public class LocalChessEngine {
     }
 
     private void checkTime() {
-        if ((nodes & 2047L) == 0L) {
+        if (minDepthDone && (nodes & 511L) == 0L) {
             if (System.currentTimeMillis() >= deadlineMs || (externalStop != null && externalStop.get())) {
                 timeUp = true;
             }
@@ -883,10 +898,13 @@ public class LocalChessEngine {
         checkTime();
         if (timeUp) return 0;
 
-        // Repetition check along current search branch
+        // Repetition check along current search branch + real game history (prevents endgame draw loops when winning)
         if (ply > 0) {
             for (int i = plyIdx - 2; i >= 0; i -= 2) {
                 if (uHash[i] == hash) return 0;
+            }
+            for (int i = 0; i < gameHistoryCount; i++) {
+                if (gameHistoryHashes[i] == hash) return 0;
             }
         }
 
@@ -1026,6 +1044,7 @@ public class LocalChessEngine {
         this.deadlineMs = System.currentTimeMillis() + timeLimitMs;
         this.nodes = 0;
         this.timeUp = false;
+        this.minDepthDone = false;
 
         for (int p = 0; p < MAX_PLY + 8; p++) {
             killers[p][0] = 0;
@@ -1065,6 +1084,7 @@ public class LocalChessEngine {
             int beta = INF;
             int iterBestMove = bestMoveOverall;
             int iterBestScore = -INF;
+            int searchedRootMoves = 0;
 
             for (int i = 0; i < legalCount; i++) {
                 pickBestMove(rootMoves, rootScores, i, legalCount);
@@ -1082,6 +1102,7 @@ public class LocalChessEngine {
                 unmakeMove(m);
 
                 if (timeUp) break;
+                searchedRootMoves++;
                 if (sc > iterBestScore) {
                     iterBestScore = sc;
                     iterBestMove = m;
@@ -1090,7 +1111,7 @@ public class LocalChessEngine {
             }
 
             if (timeUp) {
-                if (iterBestMove != 0 && iterBestScore > bestScoreOverall && depth >= 2) {
+                if (searchedRootMoves >= 2 && iterBestMove != 0 && iterBestScore > bestScoreOverall && depth >= 3) {
                     bestMoveOverall = iterBestMove;
                     bestScoreOverall = iterBestScore;
                 }
@@ -1100,10 +1121,13 @@ public class LocalChessEngine {
             bestMoveOverall = iterBestMove;
             bestScoreOverall = iterBestScore;
             completedDepth = depth;
+            if (depth >= 2) {
+                minDepthDone = true;
+            }
 
             // Forced mate found -> no need to waste extra time
             if (bestScoreOverall > MATE - 100) break;
-            if (System.currentTimeMillis() + 60 >= deadlineMs) break;
+            if (System.currentTimeMillis() + 50 >= deadlineMs) break;
         }
 
         return new SearchResult(moveToUci(bestMoveOverall), completedDepth, bestScoreOverall);

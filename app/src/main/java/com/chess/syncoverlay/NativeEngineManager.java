@@ -20,8 +20,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Multi-tier native chess super-engine coordinator.
- * Supports normal deep mode and semi-auto fastMode (target 0.3s-0.9s, hard ceiling <= 1.2s).
+ * Multi-tier native chess super-engine coordinator (v11).
+ * Fixes late-game strength collapse by preserving full SF17 NNUE reachability,
+ * rejecting low-rank ChessDB moves, and backing up with parallel ARM64 LocalChessEngine.
  */
 public class NativeEngineManager {
     public interface Callback {
@@ -62,6 +63,7 @@ public class NativeEngineManager {
             final int token,
             final String legalMovesCsv,
             final boolean fastMode,
+            final String recentFensPipe,
             final Callback callback
     ) {
         latestToken.set(token);
@@ -78,11 +80,16 @@ public class NativeEngineManager {
             }
         }
 
-        // 半自动极速模式：本地引擎并行限幅 760ms；普通模式 1800ms
-        final long localBudgetMs = fastMode ? 760L : 1800L;
-        final Future<LocalChessEngine.SearchResult> localFuture = localPool.submit(() ->
-                localEngine.findBestMove(fen, localBudgetMs, myStop)
-        );
+        final String[] historyArr = (recentFensPipe != null && !recentFensPipe.isEmpty())
+                ? recentFensPipe.split("\\|")
+                : null;
+
+        // 半自动模式本地并行搜索 1120ms（与云端同时跑，零额外耗时），普通模式 2100ms
+        final long localBudgetMs = fastMode ? 1120L : 2100L;
+        final Future<LocalChessEngine.SearchResult> localFuture = localPool.submit(() -> {
+            localEngine.setGameHistoryFens(historyArr);
+            return localEngine.findBestMove(fen, localBudgetMs, myStop);
+        });
 
         coordinatorPool.execute(() -> {
             final long startMs = System.currentTimeMillis();
@@ -91,37 +98,37 @@ public class NativeEngineManager {
             final AtomicInteger finishedCloudCount = new AtomicInteger(0);
             final int totalClouds = 4;
 
-            final int connectMs = fastMode ? 580 : 1800;
-            final int readMs = fastMode ? 820 : 2400;
+            // 关键修复：给海外 SF17/SF15 留出合理的 TLS 握手与推理窗口，避免中残局大后期全线超时
+            final int connectMs = fastMode ? 1050 : 2000;
+            final int readMs = fastMode ? 1320 : 2600;
 
-            // 1. ChessDB.cn (国内超算开局与残局库)
+            // 1. ChessDB.cn (国内超算开局与7子残局库，仅采纳 rank >= 2 强招，杜绝残局劣招)
             coordinatorPool.execute(() -> {
-                CloudCandidate res = queryChessDb(fen, legalSet, connectMs, readMs);
+                CloudCandidate res = queryChessDb(fen, legalSet, Math.min(connectMs, 800), Math.min(readMs, 1000));
                 submitCandidate(lock, bestCloud, finishedCloudCount, res);
             });
 
-            // 2. Chess-API.com (Stockfish 17 NNUE)
+            // 2. Chess-API.com (真 Stockfish 17 NNUE 16层/18层)
             coordinatorPool.execute(() -> {
                 CloudCandidate res = queryChessApiSf17(fen, legalSet, fastMode, connectMs, readMs);
                 submitCandidate(lock, bestCloud, finishedCloudCount, res);
             });
 
-            // 3. Stockfish.online
+            // 3. Stockfish.online (真 Stockfish 14层/15层)
             coordinatorPool.execute(() -> {
                 CloudCandidate res = queryStockfishOnline(fen, legalSet, fastMode, connectMs, readMs);
                 submitCandidate(lock, bestCloud, finishedCloudCount, res);
             });
 
-            // 4. Lichess Cloud Eval
+            // 4. Lichess Cloud Eval (40层云评)
             coordinatorPool.execute(() -> {
                 CloudCandidate res = queryLichessCloud(fen, legalSet, connectMs, readMs);
                 submitCandidate(lock, bestCloud, finishedCloudCount, res);
             });
 
-            // 半自动模式把云端等待压在 820ms 内，命中高优云端立即秒出，确保全流程严格 <= 1.2s
-            final long maxCloudWaitMs = fastMode ? 820L : 2600L;
-            final long goodEnoughWaitMs = fastMode ? 140L : 420L;
-            final int instantAcceptPrio = fastMode ? 95 : 100;
+            // 命中高优超算（SF17/Lichess/ChessDB强招）瞬间返回（开局 0.2s~0.4s，中残局 0.6s~1.25s）
+            final long maxCloudWaitMs = fastMode ? 1280L : 3200L;
+            final long goodEnoughWaitMs = fastMode ? 320L : 650L;
             CloudCandidate chosen = null;
 
             synchronized (lock) {
@@ -130,7 +137,7 @@ public class NativeEngineManager {
                         myStop.set(true);
                         return;
                     }
-                    if (bestCloud[0] != null && bestCloud[0].priority >= instantAcceptPrio) {
+                    if (bestCloud[0] != null && bestCloud[0].priority >= 100) {
                         chosen = bestCloud[0];
                         break;
                     }
@@ -164,15 +171,10 @@ public class NativeEngineManager {
                 return;
             }
 
-            // 所有云端均未在时限内返回 -> 立即取回并行计算的本地强引擎结果（总耗时严格压在 <= 1.15s）
-            long remainingMs = fastMode
-                    ? Math.max(40L, 1100L - (System.currentTimeMillis() - startMs))
-                    : 2200L;
+            // 云端未返回时，取回已并行搜索完毕的高强本地引擎结果（总耗时严格受控，绝不掉回 2 层弱脚本）
+            myStop.set(true);
             try {
-                if (fastMode && remainingMs <= 90L) {
-                    myStop.set(true);
-                }
-                LocalChessEngine.SearchResult localRes = localFuture.get(remainingMs, TimeUnit.MILLISECONDS);
+                LocalChessEngine.SearchResult localRes = localFuture.get(450L, TimeUnit.MILLISECONDS);
                 if (latestToken.get() != token) return;
                 if (localRes != null && isLegalUci(localRes.uci, legalSet)) {
                     callback.onBestMove(token, localRes.uci, "本地" + localRes.depth + "层");
@@ -230,7 +232,7 @@ public class NativeEngineManager {
             conn.setRequestMethod("GET");
             conn.setConnectTimeout(connectMs);
             conn.setReadTimeout(readMs);
-            conn.setRequestProperty("User-Agent", "ChessSyncOverlay/10.0");
+            conn.setRequestProperty("User-Agent", "ChessSyncOverlay/11.0");
             if (conn.getResponseCode() == 200) {
                 String body = readStream(conn.getInputStream());
                 JSONObject json = new JSONObject(body);
@@ -240,8 +242,9 @@ public class NativeEngineManager {
                         JSONObject top = moves.getJSONObject(0);
                         String uci = top.optString("uci", "").trim().toLowerCase();
                         int rank = top.optInt("rank", 0);
-                        if (isLegalUci(uci, legalSet) && (rank >= 1 || moves.length() == 1)) {
-                            int prio = (rank >= 2) ? 105 : 85;
+                        // 严格拒绝 rank == 0 的坏棋/送子缓存
+                        if (isLegalUci(uci, legalSet) && rank >= 1) {
+                            int prio = (rank >= 2) ? 105 : 75;
                             return new CloudCandidate(uci, "云库", prio);
                         }
                     }
@@ -263,12 +266,12 @@ public class NativeEngineManager {
             conn.setReadTimeout(readMs);
             conn.setDoOutput(true);
             conn.setRequestProperty("Content-Type", "application/json");
-            conn.setRequestProperty("User-Agent", "ChessSyncOverlay/10.0");
+            conn.setRequestProperty("User-Agent", "ChessSyncOverlay/11.0");
 
             JSONObject payload = new JSONObject();
             payload.put("fen", fen);
-            payload.put("depth", fastMode ? 12 : 18);
-            payload.put("maxThinkingTime", fastMode ? 28 : 100);
+            payload.put("depth", fastMode ? 16 : 18);
+            payload.put("maxThinkingTime", fastMode ? 55 : 100);
             byte[] outBytes = payload.toString().getBytes(StandardCharsets.UTF_8);
             try (OutputStream os = conn.getOutputStream()) {
                 os.write(outBytes);
@@ -278,7 +281,7 @@ public class NativeEngineManager {
                 String body = readStream(conn.getInputStream());
                 JSONObject json = new JSONObject(body);
                 String uci = json.optString("move", "").trim().toLowerCase();
-                int depth = json.optInt("depth", fastMode ? 14 : 18);
+                int depth = json.optInt("depth", fastMode ? 16 : 18);
                 if (isLegalUci(uci, legalSet)) {
                     return new CloudCandidate(uci, "SF17·" + depth + "层", 110);
                 }
@@ -293,14 +296,14 @@ public class NativeEngineManager {
     private CloudCandidate queryStockfishOnline(String fen, Set<String> legalSet, boolean fastMode, int connectMs, int readMs) {
         HttpURLConnection conn = null;
         try {
-            int reqDepth = fastMode ? 12 : 15;
+            int reqDepth = fastMode ? 14 : 15;
             String urlStr = "https://stockfish.online/api/s/v2.php?fen="
                     + URLEncoder.encode(fen, "UTF-8") + "&depth=" + reqDepth;
             conn = (HttpURLConnection) new URL(urlStr).openConnection();
             conn.setRequestMethod("GET");
             conn.setConnectTimeout(connectMs);
             conn.setReadTimeout(readMs);
-            conn.setRequestProperty("User-Agent", "ChessSyncOverlay/10.0");
+            conn.setRequestProperty("User-Agent", "ChessSyncOverlay/11.0");
 
             if (conn.getResponseCode() == 200) {
                 String body = readStream(conn.getInputStream());
@@ -311,7 +314,7 @@ public class NativeEngineManager {
                     String uci = (toks.length >= 2 && "bestmove".equals(toks[0])) ? toks[1] : toks[0];
                     uci = uci.trim().toLowerCase();
                     if (isLegalUci(uci, legalSet)) {
-                        return new CloudCandidate(uci, "SF·" + reqDepth + "层", 95);
+                        return new CloudCandidate(uci, "SF·" + reqDepth + "层", 96);
                     }
                 }
             }
@@ -331,7 +334,7 @@ public class NativeEngineManager {
             conn.setRequestMethod("GET");
             conn.setConnectTimeout(connectMs);
             conn.setReadTimeout(readMs);
-            conn.setRequestProperty("User-Agent", "ChessSyncOverlay/10.0");
+            conn.setRequestProperty("User-Agent", "ChessSyncOverlay/11.0");
 
             if (conn.getResponseCode() == 200) {
                 String body = readStream(conn.getInputStream());

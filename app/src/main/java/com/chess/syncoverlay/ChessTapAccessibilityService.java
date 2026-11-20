@@ -82,13 +82,14 @@ public class ChessTapAccessibilityService extends AccessibilityService {
             final float y1,
             final float x2,
             final float y2,
+            final int gapMs,
             final Runnable onFinished
     ) {
         final ChessTapAccessibilityService svc = instance;
         if (svc == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
             return false;
         }
-        svc.dispatchTwoTaps(x1, y1, x2, y2, onFinished);
+        svc.dispatchTwoTaps(x1, y1, x2, y2, gapMs, onFinished);
         return true;
     }
 
@@ -97,6 +98,7 @@ public class ChessTapAccessibilityService extends AccessibilityService {
             final float y1,
             final float x2,
             final float y2,
+            final int gapMs,
             final Runnable onFinished
     ) {
         final boolean[] finishedOnce = {false};
@@ -107,13 +109,14 @@ public class ChessTapAccessibilityService extends AccessibilityService {
             }
         };
 
+        final long clampedGap = Math.max(60L, Math.min(240L, gapMs));
         // 兜底保护：防止极少数系统手势回调丢失导致界面停在穿透态
-        mainHandler.postDelayed(safeFinish, 650L);
+        mainHandler.postDelayed(safeFinish, 950L);
 
-        // 极速双连点：点击时长 18ms，起止格间隔 55ms，落子后 35ms 立即交还录入控制权
+        // 稳健高速双连点：单次按压 36ms（适配 30/60fps 小游戏不丢点），起止格默认间隔 105ms，落子后 65ms 交还录入控制权
         dispatchSingleTap(x1, y1, () -> mainHandler.postDelayed(() ->
-                dispatchSingleTap(x2, y2, () -> mainHandler.postDelayed(safeFinish, 35L)),
-                55L
+                dispatchSingleTap(x2, y2, () -> mainHandler.postDelayed(safeFinish, 65L)),
+                clampedGap
         ));
     }
 
@@ -128,7 +131,7 @@ public class ChessTapAccessibilityService extends AccessibilityService {
         path.moveTo(safeX, safeY);
 
         GestureDescription.StrokeDescription stroke =
-                new GestureDescription.StrokeDescription(path, 0L, 18L);
+                new GestureDescription.StrokeDescription(path, 0L, 36L);
         GestureDescription gesture = new GestureDescription.Builder()
                 .addStroke(stroke)
                 .build();

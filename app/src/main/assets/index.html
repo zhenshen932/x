@@ -1268,17 +1268,19 @@ async function triggerAiResponse() {
   // 优先走原生安卓多线程超算管理器（绕过 WebView file:// CORS 拦截 + 四云端并行 + ARM64 本地强引擎保底）
   if (window.AndroidBridge && window.AndroidBridge.requestBestMove) {
     if (searchWatchdog) clearTimeout(searchWatchdog);
-    const hardLimitMs = isSemiAuto ? 1200 : 5200;
+    // 看门狗仅作极端异常兜底，绝不提前掐断原生 SF17/本地强引擎而掉进弱 JS
+    const hardLimitMs = isSemiAuto ? 2600 : 6000;
     searchWatchdog = setTimeout(() => {
       if (isThinking && myToken === currentSearchToken) {
         cancelNativeEngine();
-        const fallback = localBestMove(state, isSemiAuto ? 2 : 3);
-        commitAiMove(fallback, '极速本地');
+        const fallback = localBestMove(state, 3);
+        commitAiMove(fallback, '应急引擎');
       }
     }, hardLimitMs);
 
     const legalCsv = legals.map(moveToUciStr).join(',');
-    window.AndroidBridge.requestBestMove(fen, myToken, legalCsv, isSemiAuto);
+    const recentFens = historyStack.slice(-16).map(item => toFEN(item.state)).join('|');
+    window.AndroidBridge.requestBestMove(fen, myToken, legalCsv, isSemiAuto, recentFens);
     return;
   }
 

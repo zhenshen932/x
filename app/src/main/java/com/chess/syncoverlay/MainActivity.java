@@ -365,7 +365,8 @@ public class MainActivity extends Activity {
                     cur.y,
                     cur.size,
                     cur.boardAlpha,
-                    cur.pieceAlpha
+                    cur.pieceAlpha,
+                    cur.tapGapMs
             );
             PresetStore.saveOrUpdate(this, created);
             refreshUi();

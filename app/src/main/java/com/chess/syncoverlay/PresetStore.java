@@ -22,8 +22,13 @@ public class PresetStore {
         public int size;
         public int boardAlpha;
         public int pieceAlpha;
+        public int tapGapMs;
 
         public Preset(String id, String name, int x, int y, int size, int boardAlpha, int pieceAlpha) {
+            this(id, name, x, y, size, boardAlpha, pieceAlpha, 105);
+        }
+
+        public Preset(String id, String name, int x, int y, int size, int boardAlpha, int pieceAlpha, int tapGapMs) {
             this.id = id;
             this.name = name;
             this.x = x;
@@ -31,6 +36,7 @@ public class PresetStore {
             this.size = size;
             this.boardAlpha = boardAlpha;
             this.pieceAlpha = pieceAlpha;
+            this.tapGapMs = tapGapMs;
         }
 
         public JSONObject toJson() {
@@ -43,6 +49,7 @@ public class PresetStore {
                 o.put("size", size);
                 o.put("boardAlpha", boardAlpha);
                 o.put("pieceAlpha", pieceAlpha);
+                o.put("tapGapMs", tapGapMs);
             } catch (Exception ignored) {}
             return o;
         }
@@ -55,7 +62,8 @@ public class PresetStore {
                     o.optInt("y", 280),
                     o.optInt("size", 900),
                     o.optInt("boardAlpha", 42),
-                    o.optInt("pieceAlpha", 92)
+                    o.optInt("pieceAlpha", 92),
+                    o.optInt("tapGapMs", 105)
             );
         }
     }
