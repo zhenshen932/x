@@ -42,6 +42,7 @@ import android.widget.LinearLayout;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
+import java.util.Random;
 import java.util.UUID;
 
 public class OverlayService extends Service {
@@ -132,6 +133,7 @@ public class OverlayService extends Service {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private Runnable autoSwitchRunnable;
     private final NativeEngineManager engineManager = new NativeEngineManager();
+    private final Random uiRng = new Random();
 
     @Override
     public IBinder onBind(Intent intent) {
@@ -1602,7 +1604,8 @@ public class OverlayService extends Service {
         btnToggleMode.setBackground(makeEmeraldGradientBg(8, "#996EE7B7"));
         tvStatus.setText(sourceTag + "·落子");
 
-        // 2. 等待 75ms 确保底层 InputDispatcher 已生效穿透标志，随后按实时屏幕坐标稳定派发双连点
+        // 2. 等待 68ms~118ms（确保底层 InputDispatcher 生效穿透并加入起手微随机延迟），再按实时屏幕坐标派发仿真人随机双连点
+        long preTapDelayMs = 68L + uiRng.nextInt(51);
         mainHandler.postDelayed(() -> {
             if (!isRunning || boardRoot == null || isBoardHiddenInCircle) {
                 isAutoTapping = false;
@@ -1621,7 +1624,7 @@ public class OverlayService extends Service {
             float x2 = clampScreenCoord(loc[0] + (toSc + 0.5f) * cell, curW);
             float y2 = clampScreenCoord(loc[1] + (toSr + 0.5f) * cell, curH);
 
-            boolean ok = ChessTapAccessibilityService.performMoveTaps(x1, y1, x2, y2, tapGapMs, () -> {
+            boolean ok = ChessTapAccessibilityService.performMoveTaps(x1, y1, x2, y2, cell, tapGapMs, () -> {
                 isAutoTapping = false;
                 if (!isRunning || isBoardHiddenInCircle) return;
                 setBoardPassThrough(false);
@@ -1633,7 +1636,7 @@ public class OverlayService extends Service {
                 setBoardPassThrough(true);
                 tvStatus.setText(sourceTag);
             }
-        }, 75L);
+        }, preTapDelayMs);
     }
 
     private float clampScreenCoord(float val, int maxDim) {
